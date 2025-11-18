@@ -1,0 +1,315 @@
+name: Build Custom SST Containers from Git
+
+on:
+  workflow_dispatch:
+    inputs:
+      sst_core_repo:
+        description: 'SST-core repository URL'
+        required: false
+        default: 'https://github.com/sstsimulator/sst-core.git'
+        type: string
+      sst_core_ref:
+        description: 'SST-core branch, tag, or commit SHA'
+        required: true
+        type: string
+      sst_elements_repo:
+        description: 'SST-elements repository URL (leave empty for core-only build)'
+        required: false
+        type: string
+      sst_elements_ref:
+        description: 'SST-elements branch, tag, or commit SHA (required if elements_repo provided)'
+        required: false
+        type: string
+      mpich_version:
+        description: 'MPICH version to use'
+        required: false
+        default: '4.0.2'
+        type: string
+      build_platforms:
+        description: 'Platforms to build for'
+        required: false
+        default: 'linux/amd64'
+        type: choice
+        options:
+          - 'linux/amd64,linux/arm64'
+          - 'linux/amd64'
+          - 'linux/arm64'
+      custom_tag_suffix:
+        description: 'Optional tag suffix (default: short SHA of core ref)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/sst
+  BUILD_NCPUS: 4
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      build_type: ${{ steps.validate.outputs.build_type }}
+      core_short_sha: ${{ steps.validate.outputs.core_short_sha }}
+      elements_short_sha: ${{ steps.validate.outputs.elements_short_sha }}
+      tag_suffix: ${{ steps.validate.outputs.tag_suffix }}
+    steps:
+      - name: Validate inputs
+        id: validate
+        run: |
+          # Determine build type
+          if [ -n "${{ inputs.sst_elements_repo }}" ]; then
+            if [ -z "${{ inputs.sst_elements_ref }}" ]; then
+              echo "::error::SST-elements ref is required when elements_repo is provided"
+              exit 1
+            fi
+            echo "build_type=full" >> $GITHUB_OUTPUT
+          else
+            echo "build_type=core" >> $GITHUB_OUTPUT
+          fi
+
+          # Get short SHAs for tagging
+          # For core
+          CORE_SHA="${{ inputs.sst_core_ref }}"
+          CORE_SHORT_SHA=$(echo "$CORE_SHA" | cut -c1-7)
+          echo "core_short_sha=$CORE_SHORT_SHA" >> $GITHUB_OUTPUT
+
+          # For elements (if provided)
+          if [ -n "${{ inputs.sst_elements_ref }}" ]; then
+            ELEMENTS_SHA="${{ inputs.sst_elements_ref }}"
+            ELEMENTS_SHORT_SHA=$(echo "$ELEMENTS_SHA" | cut -c1-7)
+            echo "elements_short_sha=$ELEMENTS_SHORT_SHA" >> $GITHUB_OUTPUT
+          fi
+
+          # Determine tag suffix
+          if [ -n "${{ inputs.custom_tag_suffix }}" ]; then
+            echo "tag_suffix=${{ inputs.custom_tag_suffix }}" >> $GITHUB_OUTPUT
+          else
+            # Extract repo owner from core repo URL
+            REPO_URL="${{ inputs.sst_core_repo }}"
+            REPO_OWNER=$(echo "$REPO_URL" | sed -E 's/.*[:/]([^/]+)\/[^/]+\.git/\1/')
+            echo "tag_suffix=${REPO_OWNER}-${CORE_SHORT_SHA}" >> $GITHUB_OUTPUT
+          fi
+
+          echo "::notice::Build type: $(cat $GITHUB_OUTPUT | grep build_type | cut -d= -f2)"
+          echo "::notice::Tag suffix: $(cat $GITHUB_OUTPUT | grep tag_suffix | cut -d= -f2)"
+
+  download-mpich:
+    runs-on: ubuntu-latest
+    needs: validate-inputs
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache MPICH tarball
+        uses: actions/cache@v4
+        with:
+          path: Containerfiles/*.tar.gz
+          key: mpich-${{ inputs.mpich_version }}
+          restore-keys: |
+            mpich-
+
+      - name: Download MPICH source
+        run: |
+          cd Containerfiles
+
+          # Make download script executable
+          chmod +x download_tarballs.sh
+
+          # Check if MPICH tarball exists
+          MPICH_FILE="mpich-${{ inputs.mpich_version }}.tar.gz"
+          if [ -f "$MPICH_FILE" ]; then
+            echo "MPICH tarball already exists, skipping download"
+          else
+            echo "Downloading MPICH ${{ inputs.mpich_version }}..."
+            wget --no-check-certificate \
+              https://www.mpich.org/static/downloads/${{ inputs.mpich_version }}/mpich-${{ inputs.mpich_version }}.tar.gz
+          fi
+
+          # List downloaded files
+          echo "Files in Containerfiles directory:"
+          ls -la *.tar.gz || echo "No tarballs found"
+
+      - name: Upload MPICH artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpich-${{ inputs.mpich_version }}
+          path: Containerfiles/*.tar.gz
+          retention-days: 1
+
+  build-custom-containers:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, download-mpich]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download MPICH artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mpich-${{ inputs.mpich_version }}
+          path: Containerfiles/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract platform info
+        id: platform
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM##*/}"
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
+
+      - name: Determine build target and tags
+        id: build_info
+        run: |
+          BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
+          TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
+
+          if [ "$BUILD_TYPE" = "full" ]; then
+            echo "target=full-build" >> $GITHUB_OUTPUT
+            echo "image_name=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}" >> $GITHUB_OUTPUT
+          else
+            echo "target=core-build" >> $GITHUB_OUTPUT
+            echo "image_name=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}" >> $GITHUB_OUTPUT
+          fi
+
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          if [ "$BUILD_TYPE" = "full" ]; then
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:${TAG_SUFFIX}" >> $GITHUB_OUTPUT
+          else
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:${TAG_SUFFIX}" >> $GITHUB_OUTPUT
+          fi
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push custom SST container
+        uses: docker/build-push-action@v5
+        with:
+          context: Containerfiles
+          file: Containerfiles/Containerfile.tag
+          platforms: ${{ matrix.platform }}
+          target: ${{ steps.build_info.outputs.target }}
+          build-args: |
+            SSTrepo=${{ inputs.sst_core_repo }}
+            tag=${{ inputs.sst_core_ref }}
+            SSTElementsRepo=${{ inputs.sst_elements_repo }}
+            elementsTag=${{ inputs.sst_elements_ref }}
+            mpich=${{ inputs.mpich_version }}
+            NCPUS=${{ env.BUILD_NCPUS }}
+          tags: ${{ steps.build_info.outputs.tags }}
+          push: true
+          cache-from: type=gha,scope=sst-custom-${{ needs.validate-inputs.outputs.build_type }}-${{ steps.platform.outputs.arch }}
+          cache-to: type=gha,mode=max,scope=sst-custom-${{ needs.validate-inputs.outputs.build_type }}-${{ steps.platform.outputs.arch }}
+
+  validate-containers:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, build-custom-containers]
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Validate container
+        run: |
+          BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
+          TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${{ matrix.arch }}:${TAG_SUFFIX}"
+
+          echo "Validating container: $IMAGE_NAME"
+
+          # Pull and run basic validation
+          docker pull --platform linux/${{ matrix.arch }} "$IMAGE_NAME"
+
+          # Test SST installation
+          docker run --rm --platform linux/${{ matrix.arch }} "$IMAGE_NAME" sst --version
+          docker run --rm --platform linux/${{ matrix.arch }} "$IMAGE_NAME" sst-info --version
+
+          # Get image size
+          IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
+          IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))
+
+          echo "Container validation successful!"
+          echo "Image: $IMAGE_NAME"
+          echo "Size: ${IMAGE_SIZE_MB} MB"
+          echo "Platform: linux/${{ matrix.arch }}"
+          echo "Type: SST-${BUILD_TYPE}"
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, build-custom-containers, validate-containers]
+    if: always()
+    steps:
+      - name: Build Summary
+        run: |
+          echo "# Custom SST Container Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Type:** ${{ needs.validate-inputs.outputs.build_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**SST-Core Repository:** ${{ inputs.sst_core_repo }}" >> $GITHUB_STEP_SUMMARY
+          echo "**SST-Core Ref:** ${{ inputs.sst_core_ref }}" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.validate-inputs.outputs.build_type }}" = "full" ]; then
+            echo "**SST-Elements Repository:** ${{ inputs.sst_elements_repo }}" >> $GITHUB_STEP_SUMMARY
+            echo "**SST-Elements Ref:** ${{ inputs.sst_elements_ref }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "**MPICH Version:** ${{ inputs.mpich_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Platforms:** ${{ inputs.build_platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag Suffix:** ${{ needs.validate-inputs.outputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.build-custom-containers.result }}" == "success" ]; then
+            echo "✅ **Build Status:** Success" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Built Containers" >> $GITHUB_STEP_SUMMARY
+
+            BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
+            TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
+
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-amd64:${TAG_SUFFIX}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-arm64:${TAG_SUFFIX}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Build Status:** Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Usage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Pull and use the container:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+
+          BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
+          TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
+
+          echo "# Pull the container (amd64)" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-amd64:${TAG_SUFFIX}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Run the container" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-amd64:${TAG_SUFFIX}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Container Details" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Core Ref:** \`${{ inputs.sst_core_ref }}\` (short: \`${{ needs.validate-inputs.outputs.core_short_sha }}\`)" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "${{ needs.validate-inputs.outputs.elements_short_sha }}" ]; then
+            echo "- **Elements Ref:** \`${{ inputs.sst_elements_ref }}\` (short: \`${{ needs.validate-inputs.outputs.elements_short_sha }}\`)" >> $GITHUB_STEP_SUMMARY
+          fi

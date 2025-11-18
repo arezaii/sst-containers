@@ -1,0 +1,389 @@
+name: Build SST Release Containers
+
+on:
+  workflow_dispatch:
+    inputs:
+      sst_version:
+        description: 'SST version to build (e.g., 15.1.0, 15.0.0)'
+        required: true
+        type: string
+      mpich_version:
+        description: 'MPICH version to use'
+        required: false
+        default: '4.0.2'
+        type: string
+      force_rebuild:
+        description: 'Force rebuild even if containers exist'
+        required: false
+        default: false
+        type: boolean
+      ignore_cache:
+        description: 'Ignore cached tarballs and redownload'
+        required: false
+        default: false
+        type: boolean
+      build_platforms:
+        description: 'Platforms to build for'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: choice
+        options:
+          - 'linux/amd64,linux/arm64'
+          - 'linux/amd64'
+          - 'linux/arm64'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/sst
+  BUILD_NCPUS: 4
+
+jobs:
+  check-existing-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      core_amd64_exists: ${{ steps.check.outputs.core_amd64_exists }}
+      core_arm64_exists: ${{ steps.check.outputs.core_arm64_exists }}
+      full_amd64_exists: ${{ steps.check.outputs.full_amd64_exists }}
+      full_arm64_exists: ${{ steps.check.outputs.full_arm64_exists }}
+      should_build_core: ${{ steps.check.outputs.should_build_core }}
+      should_build_full: ${{ steps.check.outputs.should_build_full }}
+    steps:
+      - name: Check existing container images
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SST_VERSION="${{ inputs.sst_version }}"
+          FORCE_REBUILD="${{ inputs.force_rebuild }}"
+
+          echo "Checking for existing SST $SST_VERSION containers..."
+
+          # Function to check if image exists
+          check_image_exists() {
+            local image_name="$1"
+            local tag="$2"
+            echo "Checking for image: $image_name:$tag"
+
+            # List all package versions and check if our tag exists
+            if gh api "/orgs/${{ github.repository_owner }}/packages/container/${image_name}/versions" \
+              --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .metadata.container.tags[]" \
+              2>/dev/null | grep -x "$tag" >/dev/null; then
+              echo "  [FOUND] $image_name:$tag"
+              return 0
+            else
+              echo "  [NOT FOUND] $image_name:$tag"
+              return 1
+            fi
+          }
+
+          # Check core images
+          if check_image_exists "sst-core-amd64" "$SST_VERSION"; then
+            echo "core_amd64_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "core_amd64_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          if check_image_exists "sst-core-arm64" "$SST_VERSION"; then
+            echo "core_arm64_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "core_arm64_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Check full images
+          if check_image_exists "sst-full-amd64" "$SST_VERSION"; then
+            echo "full_amd64_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "full_amd64_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          if check_image_exists "sst-full-arm64" "$SST_VERSION"; then
+            echo "full_arm64_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "full_arm64_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Determine if we should build (either force rebuild or images don't exist)
+          if [ "$FORCE_REBUILD" = "true" ]; then
+            echo "should_build_core=true" >> $GITHUB_OUTPUT
+            echo "should_build_full=true" >> $GITHUB_OUTPUT
+            echo "::notice::Force rebuild enabled - will rebuild all containers"
+          else
+            # Check if any core images are missing
+            if [ "$(cat $GITHUB_OUTPUT | grep 'core.*_exists=false' | wc -l)" -gt 0 ]; then
+              echo "should_build_core=true" >> $GITHUB_OUTPUT
+            else
+              echo "should_build_core=false" >> $GITHUB_OUTPUT
+            fi
+
+            # Check if any full images are missing
+            if [ "$(cat $GITHUB_OUTPUT | grep 'full.*_exists=false' | wc -l)" -gt 0 ]; then
+              echo "should_build_full=true" >> $GITHUB_OUTPUT
+            else
+              echo "should_build_full=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  download-sources:
+    runs-on: ubuntu-latest
+    needs: check-existing-images
+    if: needs.check-existing-images.outputs.should_build_core == 'true' || needs.check-existing-images.outputs.should_build_full == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache source tarballs
+        if: inputs.ignore_cache != true
+        uses: actions/cache@v4
+        with:
+          path: Containerfiles/*.tar.gz
+          key: sst-sources-${{ inputs.sst_version }}-${{ inputs.mpich_version }}
+          restore-keys: |
+            sst-sources-${{ inputs.sst_version }}-
+            sst-sources-
+
+      - name: Download SST source tarballs
+        run: |
+          cd Containerfiles
+
+          # Make download script executable
+          chmod +x download_tarballs.sh
+
+          # Remove existing files if ignore_cache is true
+          if [ "${{ inputs.ignore_cache }}" = "true" ]; then
+            echo "Ignoring cache - removing existing tarballs..."
+            rm -f *.tar.gz
+          fi
+
+          # Download sources
+          ./download_tarballs.sh ${{ inputs.sst_version }} ${{ inputs.mpich_version }}
+
+          # List downloaded files
+          echo "Downloaded files:"
+          ls -la *.tar.gz
+
+      - name: Upload source artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sst-sources-${{ inputs.sst_version }}-${{ inputs.mpich_version }}
+          path: Containerfiles/*.tar.gz
+          retention-days: 1
+
+  build-core-containers:
+    runs-on: ubuntu-latest
+    needs: [check-existing-images, download-sources]
+    if: needs.check-existing-images.outputs.should_build_core == 'true'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download source artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sst-sources-${{ inputs.sst_version }}-${{ inputs.mpich_version }}
+          path: Containerfiles/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract platform info
+        id: platform
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM##*/}"
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
+
+      - name: Build and push SST-core container
+        uses: docker/build-push-action@v5
+        with:
+          context: Containerfiles
+          file: Containerfiles/Containerfile
+          platforms: ${{ matrix.platform }}
+          target: sst-core
+          build-args: |
+            SSTver=${{ inputs.sst_version }}
+            mpich=${{ inputs.mpich_version }}
+            NCPUS=${{ env.BUILD_NCPUS }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:${{ inputs.sst_version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:latest
+          push: true
+          cache-from: type=gha,scope=sst-core-${{ steps.platform.outputs.arch }}
+          cache-to: type=gha,mode=max,scope=sst-core-${{ steps.platform.outputs.arch }}
+
+  build-full-containers:
+    runs-on: ubuntu-latest
+    needs: [check-existing-images, download-sources]
+    if: needs.check-existing-images.outputs.should_build_full == 'true'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download source artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sst-sources-${{ inputs.sst_version }}-${{ inputs.mpich_version }}
+          path: Containerfiles/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract platform info
+        id: platform
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM##*/}"
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
+
+      - name: Build and push SST-full container
+        uses: docker/build-push-action@v5
+        with:
+          context: Containerfiles
+          file: Containerfiles/Containerfile
+          platforms: ${{ matrix.platform }}
+          target: sst-full
+          build-args: |
+            SSTver=${{ inputs.sst_version }}
+            mpich=${{ inputs.mpich_version }}
+            NCPUS=${{ env.BUILD_NCPUS }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:${{ inputs.sst_version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:latest
+          push: true
+          cache-from: type=gha,scope=sst-full-${{ steps.platform.outputs.arch }}
+          cache-to: type=gha,mode=max,scope=sst-full-${{ steps.platform.outputs.arch }}
+
+  validate-containers:
+    runs-on: ubuntu-latest
+    needs: [build-core-containers, build-full-containers]
+    if: always() && (needs.build-core-containers.result == 'success' || needs.build-full-containers.result == 'success')
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        type: [core, full]
+        arch: [amd64, arm64]
+        exclude:
+          - type: core
+            arch: amd64
+            condition: ${{ needs.build-core-containers.result != 'success' }}
+          - type: core
+            arch: arm64
+            condition: ${{ needs.build-core-containers.result != 'success' }}
+          - type: full
+            arch: amd64
+            condition: ${{ needs.build-full-containers.result != 'success' }}
+          - type: full
+            arch: arm64
+            condition: ${{ needs.build-full-containers.result != 'success' }}
+    steps:
+      - name: Validate container
+        run: |
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.type }}-${{ matrix.arch }}:${{ inputs.sst_version }}"
+
+          echo "Validating container: $IMAGE_NAME"
+
+          # Pull and run basic validation
+          docker pull --platform linux/${{ matrix.arch }} "$IMAGE_NAME"
+
+          # Test SST installation
+          docker run --rm --platform linux/${{ matrix.arch }} "$IMAGE_NAME" sst --version
+          docker run --rm --platform linux/${{ matrix.arch }} "$IMAGE_NAME" sst-info --version
+
+          # Get image size
+          IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
+          IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))
+
+          echo "Container validation successful!"
+          echo "Image: $IMAGE_NAME"
+          echo "Size: ${IMAGE_SIZE_MB} MB"
+          echo "Platform: linux/${{ matrix.arch }}"
+          echo "Type: SST-${{ matrix.type }}"
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [check-existing-images, build-core-containers, build-full-containers, validate-containers]
+    if: always()
+    steps:
+      - name: Build Summary
+        run: |
+          echo "# SST Release Container Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**SST Version:** ${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**MPICH Version:** ${{ inputs.mpich_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Force Rebuild:** ${{ inputs.force_rebuild }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ignore Cache:** ${{ inputs.ignore_cache }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Platforms:** ${{ inputs.build_platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Core containers
+          if [ "${{ needs.build-core-containers.result }}" == "success" ]; then
+            echo "[SUCCESS] **SST-Core Containers:** Built successfully" >> $GITHUB_STEP_SUMMARY
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-amd64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-arm64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.check-existing-images.outputs.should_build_core }}" == "true" ]; then
+            echo "[FAILED] **SST-Core Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "[SKIPPED] **SST-Core Containers:** Skipped (already exist)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Full containers
+          if [ "${{ needs.build-full-containers.result }}" == "success" ]; then
+            echo "[SUCCESS] **SST-Full Containers:** Built successfully" >> $GITHUB_STEP_SUMMARY
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-arm64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.check-existing-images.outputs.should_build_full }}" == "true" ]; then
+            echo "[FAILED] **SST-Full Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "[SKIPPED] **SST-Full Containers:** Skipped (already exist)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Usage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Pull and use the containers:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# SST-Core only (smaller image)" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# SST with Elements (full simulation capabilities)" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
