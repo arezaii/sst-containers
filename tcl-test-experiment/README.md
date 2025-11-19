@@ -4,7 +4,7 @@ Container with SST 14.1.0 and 15.0.0 plus test suite for compatibility testing.
 
 ## Quick Start
 
-1. **Build**: Use [Actions > Build Experiment Container](../../actions/workflows/build-experiment.yaml) with experiment name `tcl-test-experiment`
+1. **Build**: Use Actions > Build Experiment Container with experiment name `tcl-test-experiment`
 
 2. **Run**:
 ```bash
