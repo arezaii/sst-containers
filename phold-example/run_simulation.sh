@@ -22,7 +22,6 @@ git checkout "$COMMIT_SHA"
 
 echo "   Building PHOLD benchmark..."
 cd phold
-make clean || true
 make
 
 echo "   [SUCCESS] PHOLD benchmark built!"
