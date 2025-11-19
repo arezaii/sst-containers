@@ -219,6 +219,11 @@ jobs:
             elementsTag=${{ inputs.sst_elements_ref }}
             mpich=${{ inputs.mpich_version }}
             NCPUS=${{ env.BUILD_NCPUS }}
+          labels: |
+            com.github.sha=${{ github.sha }}
+            com.github.workflow=${{ github.workflow }}
+            com.github.run_id=${{ github.run_id }}
+            com.github.run_number=${{ github.run_number }}
           tags: ${{ steps.build_info.outputs.tags }}
           push: true
           cache-from: type=gha,scope=sst-custom-${{ needs.validate-inputs.outputs.build_type }}-${{ steps.platform.outputs.arch }}

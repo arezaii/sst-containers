@@ -240,6 +240,11 @@ jobs:
             SSTver=${{ inputs.sst_version }}
             mpich=${{ inputs.mpich_version }}
             NCPUS=${{ env.BUILD_NCPUS }}
+          labels: |
+            com.github.sha=${{ github.sha }}
+            com.github.workflow=${{ github.workflow }}
+            com.github.run_id=${{ github.run_id }}
+            com.github.run_number=${{ github.run_number }}
           tags: ${{ steps.core_tags.outputs.tags }}
           push: true
           cache-from: type=gha,scope=sst-core-${{ steps.platform.outputs.arch }}
@@ -303,6 +308,11 @@ jobs:
             SSTver=${{ inputs.sst_version }}
             mpich=${{ inputs.mpich_version }}
             NCPUS=${{ env.BUILD_NCPUS }}
+          labels: |
+            com.github.sha=${{ github.sha }}
+            com.github.workflow=${{ github.workflow }}
+            com.github.run_id=${{ github.run_id }}
+            com.github.run_number=${{ github.run_number }}
           tags: ${{ steps.full_tags.outputs.tags }}
           push: true
           cache-from: type=gha,scope=sst-full-${{ steps.platform.outputs.arch }}
