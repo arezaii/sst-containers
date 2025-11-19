@@ -300,21 +300,26 @@ jobs:
       matrix:
         type: [core, full]
         platform: ${{ fromJson(needs.check-existing-images.outputs.platforms) }}
-        exclude:
-          - type: core
-            platform: linux/amd64
-            condition: ${{ needs.build-core-containers.result != 'success' }}
-          - type: core
-            platform: linux/arm64
-            condition: ${{ needs.build-core-containers.result != 'success' }}
-          - type: full
-            platform: linux/amd64
-            condition: ${{ needs.build-full-containers.result != 'success' }}
-          - type: full
-            platform: linux/arm64
-            condition: ${{ needs.build-full-containers.result != 'success' }}
     steps:
+      - name: Check if build succeeded for this type
+        id: check
+        run: |
+          TYPE="${{ matrix.type }}"
+          if [ "$TYPE" = "core" ]; then
+            BUILD_RESULT="${{ needs.build-core-containers.result }}"
+          else
+            BUILD_RESULT="${{ needs.build-full-containers.result }}"
+          fi
+
+          echo "build_result=${BUILD_RESULT}" >> $GITHUB_OUTPUT
+
+          if [ "$BUILD_RESULT" != "success" ]; then
+            echo "::notice::Skipping validation for $TYPE - build did not succeed"
+            exit 0
+          fi
+
       - name: Extract architecture from platform
+        if: steps.check.outputs.build_result == 'success'
         id: arch
         run: |
           PLATFORM="${{ matrix.platform }}"
@@ -323,6 +328,7 @@ jobs:
           echo "::notice::Validating architecture: ${ARCH}"
 
       - name: Validate container
+        if: steps.check.outputs.build_result == 'success'
         run: |
           IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.type }}-${{ steps.arch.outputs.arch }}:${{ inputs.sst_version }}"
 
