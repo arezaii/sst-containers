@@ -200,11 +200,11 @@ jobs:
           docker pull --platform ${{ inputs.build_platform }} "$IMAGE_NAME"
 
           # Test SST installation (inherited from base)
-          docker run --rm --platform ${{ inputs.build_platform }} "$IMAGE_NAME" sst --version
+          echo "sst --version" | docker run --rm -i --platform ${{ inputs.build_platform }} "$IMAGE_NAME"
 
           # Check if experiment files are present
           echo "Checking experiment files in /experiments/${EXPERIMENT}..."
-          docker run --rm --platform ${{ inputs.build_platform }} "$IMAGE_NAME" ls -la /experiments/${EXPERIMENT}
+          echo "ls -la /experiments/${EXPERIMENT}" | docker run --rm -i --platform ${{ inputs.build_platform }} "$IMAGE_NAME"
 
           # Get image size
           IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
