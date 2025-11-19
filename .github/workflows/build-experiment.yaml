@@ -12,8 +12,8 @@ on:
         required: true
         type: choice
         options:
-          - 'sst-core'
-          - 'sst-full'
+          - 'ar-sst-core'
+          - 'ar-sst-full'
       base_image_tag:
         description: 'Base SST image tag (e.g., 15.1.0, arezaii-a1b2c3d, latest)'
         required: true
