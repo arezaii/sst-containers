@@ -1,32 +1,39 @@
-#!/bin/bash
-# Example simulation runner script
+#!/usr/bin/env bash
+set -e
 
-echo "==================================="
-echo "Example SST Simulation"
-echo "==================================="
-echo ""
+echo "PHOLD Benchmark Experiment"
+echo "========================="
 
-# Check SST installation
-echo "Checking SST installation..."
-sst --version
-echo ""
+# Configuration
+REPO_URL="https://github.com/hpc-ai-adv-dev/sst-benchmarks.git"
+COMMIT_SHA="main"  # Use specific commit SHA for reproducibility
+BENCHMARK_DIR="sst-benchmarks"
 
-# Run the SST simulation
-echo "Running SST simulation with config.py..."
-if [ -f "config.py" ]; then
-    sst config.py
-    exit_code=$?
-
-    if [ $exit_code -eq 0 ]; then
-        echo ""
-        echo "[SUCCESS] Simulation completed successfully!"
-        echo "  Check the output for results"
-    else
-        echo ""
-        echo "[ERROR] Simulation failed with exit code: $exit_code"
-        exit $exit_code
-    fi
-else
-    echo "[ERROR] config.py not found"
-    exit 1
+# Step 1: Clone and build PHOLD benchmark
+echo "1. Building PHOLD benchmark from sst-benchmarks repository..."
+if [ ! -d "$BENCHMARK_DIR" ]; then
+    echo "   Cloning sst-benchmarks repository..."
+    git clone "$REPO_URL" "$BENCHMARK_DIR"
 fi
+
+cd "$BENCHMARK_DIR"
+echo "   Checking out commit: $COMMIT_SHA"
+git checkout "$COMMIT_SHA"
+
+echo "   Building PHOLD benchmark..."
+cd phold
+make clean || true
+make
+
+echo "   [SUCCESS] PHOLD benchmark built!"
+echo ""
+
+# Step 2: Run PHOLD simulation
+echo "2. Running PHOLD simulation..."
+echo "   Parameters: 10x10 grid, 2 rings, 100ns, event density 1.0"
+sst phold_dist.py --width 10 --height 10 --ring-size 2 --time-to-run 100ns --event-density 1.0
+
+echo ""
+echo "[SUCCESS] PHOLD experiment completed!"
+echo "Library: $(pwd)/libphold.so"
+echo "Configuration: $(pwd)/phold_dist.py"
