@@ -34,7 +34,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}/sst
+  IMAGE_PREFIX: ${{ github.repository_owner }}/ar-sst
   BUILD_NCPUS: 4
 
 jobs:
@@ -80,26 +80,26 @@ jobs:
           }
 
           # Check core images
-          if check_image_exists "sst-core-amd64" "$SST_VERSION"; then
+          if check_image_exists "ar-sst-core-amd64" "$SST_VERSION"; then
             echo "core_amd64_exists=true" >> $GITHUB_OUTPUT
           else
             echo "core_amd64_exists=false" >> $GITHUB_OUTPUT
           fi
 
-          if check_image_exists "sst-core-arm64" "$SST_VERSION"; then
+          if check_image_exists "ar-sst-core-arm64" "$SST_VERSION"; then
             echo "core_arm64_exists=true" >> $GITHUB_OUTPUT
           else
             echo "core_arm64_exists=false" >> $GITHUB_OUTPUT
           fi
 
           # Check full images
-          if check_image_exists "sst-full-amd64" "$SST_VERSION"; then
+          if check_image_exists "ar-sst-full-amd64" "$SST_VERSION"; then
             echo "full_amd64_exists=true" >> $GITHUB_OUTPUT
           else
             echo "full_amd64_exists=false" >> $GITHUB_OUTPUT
           fi
 
-          if check_image_exists "sst-full-arm64" "$SST_VERSION"; then
+          if check_image_exists "ar-sst-full-arm64" "$SST_VERSION"; then
             echo "full_arm64_exists=true" >> $GITHUB_OUTPUT
           else
             echo "full_arm64_exists=false" >> $GITHUB_OUTPUT

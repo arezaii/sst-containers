@@ -48,6 +48,8 @@ env:
 jobs:
   validate-experiment:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       experiment_exists: ${{ steps.check.outputs.experiment_exists }}
       has_containerfile: ${{ steps.check.outputs.has_containerfile }}
@@ -254,6 +256,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-experiment, build-experiment-container, create-multiarch-manifest, validate-experiment-container]
     if: always()
+    permissions:
+      contents: read
     steps:
       - name: Build Summary
         run: |
