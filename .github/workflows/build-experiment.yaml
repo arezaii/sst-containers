@@ -171,9 +171,7 @@ jobs:
             com.github.workflow=${{ github.workflow }}
             com.github.run_id=${{ github.run_id }}
             com.github.run_number=${{ github.run_number }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}:${{ inputs.tag_suffix }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}:${{ inputs.tag_suffix }}
           push: true
           cache-from: type=gha,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
           cache-to: type=gha,mode=max,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
@@ -193,9 +191,7 @@ jobs:
             com.github.workflow=${{ github.workflow }}
             com.github.run_id=${{ github.run_id }}
             com.github.run_number=${{ github.run_number }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}:${{ inputs.tag_suffix }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}:${{ inputs.tag_suffix }}
           push: true
           cache-from: type=gha,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
           cache-to: type=gha,mode=max,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
@@ -232,10 +228,12 @@ jobs:
           if [ "${{ needs.build-experiment-container.result }}" == "success" ]; then
             echo "**Build Status:** Success" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Built Containers" >> $GITHUB_STEP_SUMMARY
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-amd64:${{ inputs.tag_suffix }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-arm64:${{ inputs.tag_suffix }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}\` (multi-arch)" >> $GITHUB_STEP_SUMMARY
+            echo "### Built Container" >> $GITHUB_STEP_SUMMARY
+
+            # Extract architecture from platform
+            PLATFORM="${{ inputs.build_platform }}"
+            ARCH="${PLATFORM#linux/}"
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${ARCH}:${{ inputs.tag_suffix }}\`" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Build Status:** Failed" >> $GITHUB_STEP_SUMMARY
           fi
@@ -245,11 +243,15 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Pull and run the experiment container:" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# Pull the multi-arch container (automatically selects correct architecture)" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "# Pull the container for your architecture" >> $GITHUB_STEP_SUMMARY
+
+          # Extract architecture from platform for usage example
+          PLATFORM="${{ inputs.build_platform }}"
+          ARCH="${PLATFORM#linux/}"
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${ARCH}:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Run the container" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${ARCH}:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Experiment files are located in /experiments/${{ inputs.experiment_name }}" >> $GITHUB_STEP_SUMMARY
           echo "# Scripts in the experiment directory are automatically in PATH" >> $GITHUB_STEP_SUMMARY
