@@ -1,0 +1,69 @@
+# Multi-Version SST Container (Reusing Existing Images)
+#
+# This Containerfile creates a container image with two versions of SST
+# that can be selected at runtime using the SST_VERSION environment variable.
+#
+# This version reuses existing pre-built sst-full images instead of rebuilding from source.
+# The sst-full images already contain all necessary runtime dependencies including:
+# - Python development headers (python3-dev)
+# - MPI runtime and libraries
+# - All SST core and elements installations
+#
+# BUILD ARGUMENTS:
+#   SST_14_IMAGE: SST 14.1.0 full image (default: sst-full:14.1.0)
+#   SST_15_IMAGE: SST 15.0.0 full image (default: arezaiihpe/sst-full:15.0.0)
+#
+# RUNTIME ENVIRONMENT VARIABLES:
+#   SST_VERSION: Choose SST version at runtime (14.1.0 or 15.0.0, default: 15.0.0)
+#
+# EXAMPLE BUILD:
+# docker build -f Containerfile.reuse -t sst-multi-reuse:latest .
+#
+# EXAMPLE USAGE:
+# # Use SST 15.0.0 (default)
+# docker run -it sst-multi-reuse:latest
+#
+# # Use SST 14.1.0
+# docker run -it -e SST_VERSION=14.1.0 sst-multi-reuse:latest
+#
+# # Check available versions
+# docker run --rm sst-multi-reuse:latest sst-info --version
+
+# Build arguments for specifying which SST images to use
+# Using sst-full images that include both SST core and SST elements
+ARG SST_14_IMAGE=ghcr.io/arezaii/ar-sst-full-amd64:14.1.0
+ARG SST_15_IMAGE=ghcr.io/arezaii/ar-sst-full-amd64:15.0.0
+
+# --- Extract SST 14.1.0 from existing image ---
+FROM ${SST_14_IMAGE} AS sst-14-extract
+
+# --- Use SST 15.0.0 image as base (already has all runtime dependencies) ---
+FROM ${SST_15_IMAGE} AS sst-multi-reuse
+
+# Copy SST 14.1.0 installation from the other image
+# (SST 15.0.0 is already in this base image)
+COPY --from=sst-14-extract /opt/SST/14.1.0 /opt/SST/14.1.0
+
+# Install CMake for test suite
+RUN apt update && apt install -y \
+    cmake \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Clone the test suite but don't configure it yet
+RUN git clone https://github.com/tactcomplabs/sst-ext-tests.git && \
+    cd sst-ext-tests && \
+    mkdir build
+
+# Copy TCL entrypoint script that handles version switching and test configuration
+COPY sst-tcl-entrypoint.sh /usr/local/bin/sst-tcl-entrypoint.sh
+RUN chmod +x /usr/local/bin/sst-tcl-entrypoint.sh
+
+# Add sst-info wrapper to PATH
+ENV PATH="/usr/local/bin:$PATH"
+
+# Set working directory
+WORKDIR /workspace
+
+# Set entrypoint to TCL version that handles test suite configuration
+ENTRYPOINT ["/usr/local/bin/sst-tcl-entrypoint.sh"]
+CMD ["/bin/bash"]
