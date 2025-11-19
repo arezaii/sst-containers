@@ -54,6 +54,7 @@ jobs:
       experiment_exists: ${{ steps.check.outputs.experiment_exists }}
       has_containerfile: ${{ steps.check.outputs.has_containerfile }}
       files_count: ${{ steps.check.outputs.files_count }}
+      platforms: ${{ steps.check.outputs.platforms }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -62,6 +63,11 @@ jobs:
         id: check
         run: |
           EXPERIMENT="${{ inputs.experiment_name }}"
+
+          # Parse build platforms into JSON array for matrix
+          PLATFORMS="${{ inputs.build_platforms }}"
+          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
+          echo "::notice::Platforms: $PLATFORMS"
 
           # Check if experiment directory exists
           if [ ! -d "$EXPERIMENT" ]; then
@@ -100,7 +106,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        platform: ${{ fromJson(needs.validate-experiment.outputs.platforms) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -186,7 +192,7 @@ jobs:
 
   create-multiarch-manifest:
     runs-on: ubuntu-latest
-    needs: build-experiment-container
+    needs: [validate-experiment, build-experiment-container]
     permissions:
       contents: read
       packages: write
@@ -203,11 +209,21 @@ jobs:
           EXPERIMENT="${{ inputs.experiment_name }}"
           TAG="${{ inputs.tag_suffix }}"
 
+          # Parse platforms and build manifest arguments
+          PLATFORMS="${{ inputs.build_platforms }}"
+          MANIFEST_ARGS=""
+
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+          for platform in "${PLATFORM_ARRAY[@]}"; do
+            # Extract architecture from platform (linux/amd64 -> amd64)
+            arch="${platform#linux/}"
+            MANIFEST_ARGS="$MANIFEST_ARGS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}-${arch}:${TAG}"
+          done
+
           # Create manifest list
           docker manifest create \
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}:${TAG} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}-amd64:${TAG} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}-arm64:${TAG}
+            $MANIFEST_ARGS
 
           # Push manifest
           docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}:${TAG}
@@ -222,25 +238,33 @@ jobs:
       packages: read
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        platform: ${{ fromJson(needs.validate-experiment.outputs.platforms) }}
     steps:
+      - name: Extract architecture from platform
+        id: arch
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM#linux/}"
+          echo "arch=${ARCH}" >> $GITHUB_OUTPUT
+          echo "::notice::Validating architecture: ${ARCH}"
+
       - name: Validate container
         run: |
           EXPERIMENT="${{ inputs.experiment_name }}"
           TAG="${{ inputs.tag_suffix }}"
-          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}-${{ matrix.arch }}:${TAG}"
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}-${{ steps.arch.outputs.arch }}:${TAG}"
 
           echo "Validating experiment container: $IMAGE_NAME"
 
           # Pull the container
-          docker pull --platform linux/${{ matrix.arch }} "$IMAGE_NAME"
+          docker pull --platform ${{ matrix.platform }} "$IMAGE_NAME"
 
           # Test SST installation (inherited from base)
-          docker run --rm --platform linux/${{ matrix.arch }} "$IMAGE_NAME" sst --version
+          docker run --rm --platform ${{ matrix.platform }} "$IMAGE_NAME" sst --version
 
           # Check if experiment files are present
           echo "Checking experiment files in /experiments/${EXPERIMENT}..."
-          docker run --rm --platform linux/${{ matrix.arch }} "$IMAGE_NAME" ls -la /experiments/${EXPERIMENT}
+          docker run --rm --platform ${{ matrix.platform }} "$IMAGE_NAME" ls -la /experiments/${EXPERIMENT}
 
           # Get image size
           IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
@@ -249,7 +273,7 @@ jobs:
           echo "Container validation successful!"
           echo "Image: $IMAGE_NAME"
           echo "Size: ${IMAGE_SIZE_MB} MB"
-          echo "Platform: linux/${{ matrix.arch }}"
+          echo "Platform: ${{ matrix.platform }}"
           echo "Experiment: ${EXPERIMENT}"
 
   summary:
