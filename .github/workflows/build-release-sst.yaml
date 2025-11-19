@@ -31,6 +31,11 @@ on:
           - 'linux/amd64,linux/arm64'
           - 'linux/amd64'
           - 'linux/arm64'
+      tag_as_latest:
+        description: 'Also tag this version as "latest"'
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -215,6 +220,15 @@ jobs:
           echo "arch=$ARCH" >> $GITHUB_OUTPUT
           echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
 
+      - name: Prepare tags for SST-core
+        id: core_tags
+        run: |
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:${{ inputs.sst_version }}"
+          if [ "${{ inputs.tag_as_latest }}" = "true" ]; then
+            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:latest"
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
       - name: Build and push SST-core container
         uses: docker/build-push-action@v5
         with:
@@ -226,9 +240,7 @@ jobs:
             SSTver=${{ inputs.sst_version }}
             mpich=${{ inputs.mpich_version }}
             NCPUS=${{ env.BUILD_NCPUS }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:${{ inputs.sst_version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:latest
+          tags: ${{ steps.core_tags.outputs.tags }}
           push: true
           cache-from: type=gha,scope=sst-core-${{ steps.platform.outputs.arch }}
           cache-to: type=gha,mode=max,scope=sst-core-${{ steps.platform.outputs.arch }}
@@ -271,6 +283,15 @@ jobs:
           echo "arch=$ARCH" >> $GITHUB_OUTPUT
           echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
 
+      - name: Prepare tags for SST-full
+        id: full_tags
+        run: |
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:${{ inputs.sst_version }}"
+          if [ "${{ inputs.tag_as_latest }}" = "true" ]; then
+            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:latest"
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
       - name: Build and push SST-full container
         uses: docker/build-push-action@v5
         with:
@@ -282,9 +303,7 @@ jobs:
             SSTver=${{ inputs.sst_version }}
             mpich=${{ inputs.mpich_version }}
             NCPUS=${{ env.BUILD_NCPUS }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:${{ inputs.sst_version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:latest
+          tags: ${{ steps.full_tags.outputs.tags }}
           push: true
           cache-from: type=gha,scope=sst-full-${{ steps.platform.outputs.arch }}
           cache-to: type=gha,mode=max,scope=sst-full-${{ steps.platform.outputs.arch }}
@@ -365,6 +384,7 @@ jobs:
           echo "**Force Rebuild:** ${{ inputs.force_rebuild }}" >> $GITHUB_STEP_SUMMARY
           echo "**Ignore Cache:** ${{ inputs.ignore_cache }}" >> $GITHUB_STEP_SUMMARY
           echo "**Build Platforms:** ${{ inputs.build_platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag as Latest:** ${{ inputs.tag_as_latest }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "## Build Results" >> $GITHUB_STEP_SUMMARY
