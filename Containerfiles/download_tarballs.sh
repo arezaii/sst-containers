@@ -114,9 +114,9 @@ for file in "${files[@]}"; do
         size_bytes=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "0")
         size_mb=$((size_bytes / 1024 / 1024))
         total_size=$((total_size + size_mb))
-        echo "✓ $file (${size_mb} MB)"
+        echo "[SUCCESS] $file (${size_mb} MB)"
     else
-        echo "✗ $file (MISSING)"
+        echo "[ERROR] $file (MISSING)"
         all_present=false
     fi
 done
@@ -125,7 +125,7 @@ echo "=================================================="
 echo "Total download size: ${total_size} MB"
 
 if $all_present; then
-    echo "✓ All files downloaded successfully!"
+    echo "[SUCCESS] All files downloaded successfully!"
     echo ""
     echo "Files downloaded to current directory:"
     echo ""
@@ -137,6 +137,6 @@ if $all_present; then
     echo "1. Files are ready in your current build directory"
     echo "2. Use the Containerfile to build an SST image"
 else
-    echo "✗ Some downloads failed. Check network connection and try again."
+    echo "[ERROR] Some downloads failed. Check network connection and try again."
     exit 1
 fi

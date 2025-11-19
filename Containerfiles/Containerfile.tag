@@ -9,9 +9,9 @@
 #   NCPUS:  Parallel make jobs (default: 2)
 #
 # STAGES DEFINED:
-#   base       – installs OS + build dependencies + compiles MPICH
-#   core-build – builds SST-core
-#   full-build – builds SST-elements (optional)
+#   base       - installs OS + build dependencies + compiles MPICH
+#   core-build - builds SST-core
+#   full-build - builds SST-elements (optional)
 
 #
 # EXAMPLE USAGE:
