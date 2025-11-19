@@ -18,21 +18,12 @@ on:
         description: 'Base SST image tag (e.g., 15.1.0, arezaii-a1b2c3d, latest)'
         required: true
         type: string
-      base_image_arch:
-        description: 'Base image architecture'
-        required: true
-        type: choice
-        default: 'amd64'
-        options:
-          - 'amd64'
-          - 'arm64'
-      build_platforms:
-        description: 'Platforms to build for'
+      build_platform:
+        description: 'Platform to build for'
         required: false
         default: 'linux/amd64'
         type: choice
         options:
-          - 'linux/amd64,linux/arm64'
           - 'linux/amd64'
           - 'linux/arm64'
       tag_suffix:
@@ -54,7 +45,6 @@ jobs:
       experiment_exists: ${{ steps.check.outputs.experiment_exists }}
       has_containerfile: ${{ steps.check.outputs.has_containerfile }}
       files_count: ${{ steps.check.outputs.files_count }}
-      platforms: ${{ steps.check.outputs.platforms }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -63,11 +53,6 @@ jobs:
         id: check
         run: |
           EXPERIMENT="${{ inputs.experiment_name }}"
-
-          # Parse build platforms into JSON array for matrix
-          PLATFORMS="${{ inputs.build_platforms }}"
-          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
-          echo "::notice::Platforms: $PLATFORMS"
 
           # Check if experiment directory exists
           if [ ! -d "$EXPERIMENT" ]; then
@@ -104,9 +89,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        platform: ${{ fromJson(needs.validate-experiment.outputs.platforms) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -124,7 +106,7 @@ jobs:
       - name: Extract platform info
         id: platform
         run: |
-          PLATFORM="${{ matrix.platform }}"
+          PLATFORM="${{ inputs.build_platform }}"
           ARCH="${PLATFORM##*/}"
           echo "arch=$ARCH" >> $GITHUB_OUTPUT
           echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
@@ -135,7 +117,7 @@ jobs:
           EXPERIMENT="${{ inputs.experiment_name }}"
           BASE_TYPE="${{ inputs.base_image_type }}"
           BASE_TAG="${{ inputs.base_image_tag }}"
-          BASE_ARCH="${{ inputs.base_image_arch }}"
+          BASE_ARCH="${{ steps.platform.outputs.arch }}"
 
           # Construct base image name
           BASE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${BASE_TYPE}-${BASE_ARCH}:${BASE_TAG}"
@@ -151,7 +133,7 @@ jobs:
             # Create a default Containerfile
             mkdir -p .build-temp
             cat > .build-temp/Containerfile << 'EOF'
-          ARG BASE_IMAGE
+          ARG BASE_IMAGE=ubuntu:22.04
           FROM ${BASE_IMAGE}
 
           ARG EXPERIMENT_NAME
@@ -180,55 +162,16 @@ jobs:
         with:
           context: ${{ inputs.experiment_name }}
           file: ${{ steps.prepare.outputs.containerfile }}
-          platforms: ${{ matrix.platform }}
+          platforms: ${{ inputs.build_platform }}
           build-args: |
             BASE_IMAGE=${{ steps.prepare.outputs.base_image }}
             EXPERIMENT_NAME=${{ inputs.experiment_name }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}:${{ inputs.tag_suffix }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}
           push: true
           cache-from: type=gha,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
           cache-to: type=gha,mode=max,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
-
-  create-multiarch-manifest:
-    runs-on: ubuntu-latest
-    needs: [validate-experiment, build-experiment-container]
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create and push multi-arch manifest
-        run: |
-          EXPERIMENT="${{ inputs.experiment_name }}"
-          TAG="${{ inputs.tag_suffix }}"
-
-          # Parse platforms and build manifest arguments
-          PLATFORMS="${{ inputs.build_platforms }}"
-          MANIFEST_ARGS=""
-
-          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
-          for platform in "${PLATFORM_ARRAY[@]}"; do
-            # Extract architecture from platform (linux/amd64 -> amd64)
-            arch="${platform#linux/}"
-            MANIFEST_ARGS="$MANIFEST_ARGS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}-${arch}:${TAG}"
-          done
-
-          # Create manifest list
-          docker manifest create \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}:${TAG} \
-            $MANIFEST_ARGS
-
-          # Push manifest
-          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}:${TAG}
-
-          echo "::notice::Created multi-arch manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${EXPERIMENT}:${TAG}"
 
   validate-experiment-container:
     runs-on: ubuntu-latest
@@ -236,14 +179,11 @@ jobs:
     permissions:
       contents: read
       packages: read
-    strategy:
-      matrix:
-        platform: ${{ fromJson(needs.validate-experiment.outputs.platforms) }}
     steps:
       - name: Extract architecture from platform
         id: arch
         run: |
-          PLATFORM="${{ matrix.platform }}"
+          PLATFORM="${{ inputs.build_platform }}"
           ARCH="${PLATFORM#linux/}"
           echo "arch=${ARCH}" >> $GITHUB_OUTPUT
           echo "::notice::Validating architecture: ${ARCH}"
@@ -257,14 +197,14 @@ jobs:
           echo "Validating experiment container: $IMAGE_NAME"
 
           # Pull the container
-          docker pull --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          docker pull --platform ${{ inputs.build_platform }} "$IMAGE_NAME"
 
           # Test SST installation (inherited from base)
-          docker run --rm --platform ${{ matrix.platform }} "$IMAGE_NAME" sst --version
+          docker run --rm --platform ${{ inputs.build_platform }} "$IMAGE_NAME" sst --version
 
           # Check if experiment files are present
           echo "Checking experiment files in /experiments/${EXPERIMENT}..."
-          docker run --rm --platform ${{ matrix.platform }} "$IMAGE_NAME" ls -la /experiments/${EXPERIMENT}
+          docker run --rm --platform ${{ inputs.build_platform }} "$IMAGE_NAME" ls -la /experiments/${EXPERIMENT}
 
           # Get image size
           IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
@@ -273,12 +213,12 @@ jobs:
           echo "Container validation successful!"
           echo "Image: $IMAGE_NAME"
           echo "Size: ${IMAGE_SIZE_MB} MB"
-          echo "Platform: ${{ matrix.platform }}"
+          echo "Platform: ${{ inputs.build_platform }}"
           echo "Experiment: ${EXPERIMENT}"
 
   summary:
     runs-on: ubuntu-latest
-    needs: [validate-experiment, build-experiment-container, create-multiarch-manifest, validate-experiment-container]
+    needs: [validate-experiment, build-experiment-container, validate-experiment-container]
     if: always()
     permissions:
       contents: read
@@ -290,8 +230,7 @@ jobs:
           echo "**Experiment Name:** ${{ inputs.experiment_name }}" >> $GITHUB_STEP_SUMMARY
           echo "**Base Image Type:** ${{ inputs.base_image_type }}" >> $GITHUB_STEP_SUMMARY
           echo "**Base Image Tag:** ${{ inputs.base_image_tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Base Image Arch:** ${{ inputs.base_image_arch }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Platforms:** ${{ inputs.build_platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Platform:** ${{ inputs.build_platform }}" >> $GITHUB_STEP_SUMMARY
           echo "**Container Tag:** ${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -332,4 +271,8 @@ jobs:
           echo "## Base Image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "This experiment container is built on top of:" >> $GITHUB_STEP_SUMMARY
-          echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.base_image_type }}-${{ inputs.base_image_arch }}:${{ inputs.base_image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+
+          # Extract architecture from platform
+          PLATFORM="${{ inputs.build_platform }}"
+          ARCH="${PLATFORM#linux/}"
+          echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.base_image_type }}-${ARCH}:${{ inputs.base_image_tag }}\`" >> $GITHUB_STEP_SUMMARY
