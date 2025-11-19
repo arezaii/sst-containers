@@ -30,7 +30,7 @@ echo ""
 # Step 2: Run PHOLD simulation
 echo "2. Running PHOLD simulation..."
 echo "   Parameters: 10x10 grid, 2 rings, 100ns, event density 1.0"
-sst phold_dist.py -- --width 10 --height 10 --ring-size 2 --time-to-run 100ns --event-density 1.0 --verbose
+sst phold_dist.py -- --width 10 --height 10 --ring-size 2 --time-to-run 100ns --event-density 1.0 --verbose 1
 
 echo ""
 echo "[SUCCESS] PHOLD experiment completed!"
