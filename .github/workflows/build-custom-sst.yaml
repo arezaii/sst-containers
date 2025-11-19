@@ -276,7 +276,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.build-custom-containers.result }}" == "success" ]; then
-            echo "✅ **Build Status:** Success" >> $GITHUB_STEP_SUMMARY
+            echo "**Build Status:** Success" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Built Containers" >> $GITHUB_STEP_SUMMARY
 
@@ -286,7 +286,7 @@ jobs:
             echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-amd64:${TAG_SUFFIX}\`" >> $GITHUB_STEP_SUMMARY
             echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-arm64:${TAG_SUFFIX}\`" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ **Build Status:** Failed" >> $GITHUB_STEP_SUMMARY
+            echo "**Build Status:** Failed" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY

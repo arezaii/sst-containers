@@ -74,11 +74,11 @@ download_file() {
     fi
 
     if wget --no-check-certificate --progress=bar:force "$url" -O "$filename"; then
-        echo "✓ Successfully downloaded $filename"
+        echo "[SUCCESS] Successfully downloaded $filename"
         # Show file size
         echo "  File size: $(ls -lh "$filename" | awk '{print $5}')"
     else
-        echo "✗ Failed to download $filename"
+        echo "[ERROR] Failed to download $filename"
         echo "  URL: $url"
         rm -f "$filename"  # Remove partial download
         return 1
