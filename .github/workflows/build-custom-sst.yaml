@@ -54,6 +54,7 @@ jobs:
       core_short_sha: ${{ steps.validate.outputs.core_short_sha }}
       elements_short_sha: ${{ steps.validate.outputs.elements_short_sha }}
       tag_suffix: ${{ steps.validate.outputs.tag_suffix }}
+      platforms: ${{ steps.validate.outputs.platforms }}
     steps:
       - name: Validate inputs
         id: validate
@@ -92,8 +93,13 @@ jobs:
             echo "tag_suffix=${REPO_OWNER}-${CORE_SHORT_SHA}" >> $GITHUB_OUTPUT
           fi
 
+          # Parse build platforms into JSON array for matrix
+          PLATFORMS="${{ inputs.build_platforms }}"
+          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
+
           echo "::notice::Build type: $(cat $GITHUB_OUTPUT | grep build_type | cut -d= -f2)"
           echo "::notice::Tag suffix: $(cat $GITHUB_OUTPUT | grep tag_suffix | cut -d= -f2)"
+          echo "::notice::Platforms: $PLATFORMS"
 
   download-mpich:
     runs-on: ubuntu-latest
@@ -148,7 +154,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        platform: ${{ fromJson(needs.validate-inputs.outputs.platforms) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -226,22 +232,29 @@ jobs:
       packages: read
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        platform: ${{ fromJson(needs.validate-inputs.outputs.platforms) }}
     steps:
+      - name: Extract architecture
+        id: arch
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM##*/}"
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+
       - name: Validate container
         run: |
           BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
           TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
-          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${{ matrix.arch }}:${TAG_SUFFIX}"
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${{ steps.arch.outputs.arch }}:${TAG_SUFFIX}"
 
           echo "Validating container: $IMAGE_NAME"
 
           # Pull and run basic validation
-          docker pull --platform linux/${{ matrix.arch }} "$IMAGE_NAME"
+          docker pull --platform ${{ matrix.platform }} "$IMAGE_NAME"
 
           # Test SST installation
-          docker run --rm --platform linux/${{ matrix.arch }} "$IMAGE_NAME" sst --version
-          docker run --rm --platform linux/${{ matrix.arch }} "$IMAGE_NAME" sst-info --version
+          docker run --rm --platform ${{ matrix.platform }} "$IMAGE_NAME" sst --version
+          docker run --rm --platform ${{ matrix.platform }} "$IMAGE_NAME" sst-info --version
 
           # Get image size
           IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
@@ -250,7 +263,7 @@ jobs:
           echo "Container validation successful!"
           echo "Image: $IMAGE_NAME"
           echo "Size: ${IMAGE_SIZE_MB} MB"
-          echo "Platform: linux/${{ matrix.arch }}"
+          echo "Platform: ${{ matrix.platform }}"
           echo "Type: SST-${BUILD_TYPE}"
 
   summary:
@@ -289,8 +302,12 @@ jobs:
             BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
             TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
 
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-amd64:${TAG_SUFFIX}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-arm64:${TAG_SUFFIX}\`" >> $GITHUB_STEP_SUMMARY
+            # Parse platforms and list each built container
+            PLATFORMS="${{ inputs.build_platforms }}"
+            for PLATFORM in ${PLATFORMS//,/ }; do
+              ARCH="${PLATFORM##*/}"
+              echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${ARCH}:${TAG_SUFFIX}\`" >> $GITHUB_STEP_SUMMARY
+            done
           else
             echo "**Build Status:** Failed" >> $GITHUB_STEP_SUMMARY
           fi
@@ -304,11 +321,16 @@ jobs:
           BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
           TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
 
-          echo "# Pull the container (amd64)" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-amd64:${TAG_SUFFIX}" >> $GITHUB_STEP_SUMMARY
+          # Get first platform for usage example
+          PLATFORMS="${{ inputs.build_platforms }}"
+          FIRST_PLATFORM="${PLATFORMS%%,*}"
+          FIRST_ARCH="${FIRST_PLATFORM##*/}"
+
+          echo "# Pull the container (${FIRST_ARCH})" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${FIRST_ARCH}:${TAG_SUFFIX}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Run the container" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-amd64:${TAG_SUFFIX}" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${FIRST_ARCH}:${TAG_SUFFIX}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
