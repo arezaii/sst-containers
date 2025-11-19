@@ -338,8 +338,8 @@ jobs:
           docker pull --platform ${{ matrix.platform }} "$IMAGE_NAME"
 
           # Test SST installation
-          docker run --rm --platform ${{ matrix.platform }} "$IMAGE_NAME" sst --version
-          docker run --rm --platform ${{ matrix.platform }} "$IMAGE_NAME" sst-info --version
+          echo "sst --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          echo "sst-info --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
 
           # Get image size
           IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
