@@ -157,7 +157,22 @@ jobs:
             echo "::notice::Using default Containerfile template"
           fi
 
-      - name: Build and push experiment container
+      - name: Build and push experiment container (custom Containerfile)
+        if: needs.validate-experiment.outputs.has_containerfile == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.experiment_name }}
+          file: ${{ inputs.experiment_name }}/Containerfile
+          platforms: ${{ inputs.build_platform }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}:${{ inputs.tag_suffix }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}
+          push: true
+          cache-from: type=gha,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
+          cache-to: type=gha,mode=max,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
+
+      - name: Build and push experiment container (default template)
+        if: needs.validate-experiment.outputs.has_containerfile == 'false'
         uses: docker/build-push-action@v5
         with:
           context: ${{ inputs.experiment_name }}
