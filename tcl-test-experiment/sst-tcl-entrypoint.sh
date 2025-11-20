@@ -25,7 +25,7 @@ esac
 
 # Configure test suite if not already done for this SST version
 TEST_BUILD_DIR="/workspace/sst-ext-tests/build-$SST_VERSION"
-if [ ! -d "$TEST_BUILD_DIR" ]; then
+if [ ! -d "$TEST_BUILD_DIR" ] || [ ! -f "$TEST_BUILD_DIR/Makefile" ]; then
     echo "Configuring test suite for SST $SST_VERSION..."
     mkdir -p "$TEST_BUILD_DIR"
     cd "$TEST_BUILD_DIR"
