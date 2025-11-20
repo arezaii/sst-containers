@@ -90,7 +90,7 @@ jobs:
           for platform in "${PLATFORM_ARRAY[@]}"; do
             ARCH="${platform#linux/}"
             IMAGE_NAME="sst-dev-${ARCH}"
-            
+
             if ! check_image_exists "$IMAGE_NAME" "$TAG_SUFFIX" || [ "$FORCE_REBUILD" = "true" ]; then
               SHOULD_BUILD=true
               break
@@ -300,7 +300,7 @@ jobs:
 
           if [ "${{ needs.build-dev-containers.result }}" == "success" ]; then
             echo "[SUCCESS] **SST Development Containers:** Built successfully" >> $GITHUB_STEP_SUMMARY
-            
+
             # List built containers based on platforms
             PLATFORMS="${{ inputs.build_platforms }}"
             IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"

@@ -5,7 +5,7 @@
 #   NCPUS:  Parallel make jobs (default: 2)
 #
 # STAGES DEFINED:
-#   base       – installs OS + build dependencies + compiles MPICH
+#   base       - installs OS + build dependencies + compiles MPICH
 #
 # Assumes you have tar.gz for MPICH already
 #
