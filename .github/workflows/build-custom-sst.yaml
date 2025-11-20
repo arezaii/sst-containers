@@ -224,6 +224,8 @@ jobs:
             com.github.workflow=${{ github.workflow }}
             com.github.run_id=${{ github.run_id }}
             com.github.run_number=${{ github.run_number }}
+            com.github.repository=${{ github.repository }}
+            com.github.ref_name=${{ github.ref_name }}
           tags: ${{ steps.build_info.outputs.tags }}
           push: true
           cache-from: type=gha,scope=sst-custom-${{ needs.validate-inputs.outputs.build_type }}-${{ steps.platform.outputs.arch }}

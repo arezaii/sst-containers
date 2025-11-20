@@ -245,6 +245,8 @@ jobs:
             com.github.workflow=${{ github.workflow }}
             com.github.run_id=${{ github.run_id }}
             com.github.run_number=${{ github.run_number }}
+            com.github.repository=${{ github.repository }}
+            com.github.ref_name=${{ github.ref_name }}
           tags: ${{ steps.core_tags.outputs.tags }}
           push: true
           cache-from: type=gha,scope=sst-core-${{ steps.platform.outputs.arch }}
@@ -313,6 +315,8 @@ jobs:
             com.github.workflow=${{ github.workflow }}
             com.github.run_id=${{ github.run_id }}
             com.github.run_number=${{ github.run_number }}
+            com.github.repository=${{ github.repository }}
+            com.github.ref_name=${{ github.ref_name }}
           tags: ${{ steps.full_tags.outputs.tags }}
           push: true
           cache-from: type=gha,scope=sst-full-${{ steps.platform.outputs.arch }}
