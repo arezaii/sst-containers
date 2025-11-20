@@ -167,7 +167,7 @@ jobs:
           retention-days: 1
 
   build-dev-containers:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm64' || 'ubuntu-latest' }}
     needs: [check-existing-images, download-sources]
     if: needs.check-existing-images.outputs.should_build == 'true'
     permissions:
@@ -216,7 +216,6 @@ jobs:
         with:
           context: Containerfiles
           file: Containerfiles/Containerfile.dev
-          platforms: ${{ matrix.platform }}
           build-args: |
             mpich=${{ inputs.mpich_version }}
             NCPUS=${{ env.BUILD_NCPUS }}
@@ -233,7 +232,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=sst-dev-${{ steps.platform.outputs.arch }}
 
   validate-containers:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm64' || 'ubuntu-latest' }}
     needs: [check-existing-images, build-dev-containers]
     if: always() && needs.build-dev-containers.result == 'success'
     permissions:
@@ -259,15 +258,15 @@ jobs:
           echo "Validating container: $IMAGE_NAME"
 
           # Pull and run basic validation
-          docker pull --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          docker pull "$IMAGE_NAME"
 
           # Test MPICH installation
-          echo "mpicc --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
-          echo "which mpirun" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          echo "mpicc --version" | docker run --rm -i "$IMAGE_NAME"
+          echo "which mpirun" | docker run --rm -i "$IMAGE_NAME"
 
           # Test basic build tools
-          echo "gcc --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
-          echo "python3 --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          echo "gcc --version" | docker run --rm -i "$IMAGE_NAME"
+          echo "python3 --version" | docker run --rm -i "$IMAGE_NAME"
 
           # Get image size
           IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
