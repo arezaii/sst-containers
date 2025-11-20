@@ -1,0 +1,51 @@
+# Containerfile for hello-experiment (Podman/Docker compatible)
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install basic dependencies and MPI
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    gfortran \
+    wget \
+    git \
+    python3 \
+    libfabric-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install MPICH (compatible version) with minimal configuration
+ENV MPICH_VERSION=4.1.1
+RUN mkdir -p /tmp/mpich && \
+    cd /tmp/mpich && \
+    wget -O mpich-${MPICH_VERSION}.tar.gz http://www.mpich.org/static/downloads/${MPICH_VERSION}/mpich-${MPICH_VERSION}.tar.gz && \
+    tar xzf mpich-${MPICH_VERSION}.tar.gz && \
+    cd mpich-${MPICH_VERSION} && \
+    ./configure --prefix=/opt/mpich \
+                --disable-fortran \
+                --disable-cxx \
+                --disable-f77 \
+                --disable-fc && \
+    make -j$(nproc) install && \
+    rm -rf /tmp/mpich
+
+# Add MPICH to PATH (but allow host MPI to override)
+ENV PATH="/opt/mpich/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/mpich/lib:${LD_LIBRARY_PATH}"
+
+# Copy MPI test source code
+COPY mpitest.c /opt/mpitest.c
+
+# Copy main experiment script
+COPY run_simulation.sh /opt/run_simulation.sh
+
+# Compile MPI test program and set up scripts
+RUN cd /opt && \
+    /opt/mpich/bin/mpicc -o mpitest mpitest.c && \
+    chmod +x /opt/run_simulation.sh
+
+# Set working directory
+WORKDIR /opt
+
+CMD ["/bin/bash"]

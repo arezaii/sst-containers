@@ -9,7 +9,7 @@
 # - MPI runtime and libraries
 # - All SST core and elements installations
 #
-# BUILD ARGUMENTS:
+# BUILD ARGUMENTS: (TODO: UPDATE IMAGE SOURCE LOCATIONS)
 #   SST_14_IMAGE: SST 14.1.0 full image (default: sst-full:14.1.0)
 #   SST_15_IMAGE: SST 15.0.0 full image (default: arezaiihpe/sst-full:15.0.0)
 #
