@@ -31,10 +31,10 @@ Go to Actions tab and select:
 
 ## Container Types
 
-**Release**: `ghcr.io/arezaii/ar-sst-core-amd64:15.1.0` (official SST versions)
-**Development**: `ghcr.io/arezaii/sst-dev-amd64:latest` (build environment with dependencies)
-**Custom**: `ghcr.io/arezaii/ar-sst-core-amd64:custom-a1b2c3d` (custom SST from git sources)
-**Experiment**: `ghcr.io/arezaii/my-experiment-amd64:latest` (your scripts, SST optional if Containerfile provided)
+- **Release**: `ghcr.io/arezaii/ar-sst-core-amd64:15.1.0` (official SST versions)
+- **Development**: `ghcr.io/arezaii/sst-dev-amd64:latest` (build environment with dependencies)
+- **Custom**: `ghcr.io/arezaii/ar-sst-core-amd64:custom-a1b2c3d` (custom SST from git sources)
+- **Experiment**: `ghcr.io/arezaii/my-experiment-amd64:latest` (your scripts, SST optional if Containerfile provided)
 
 ## Automated Building & Packaging
 
