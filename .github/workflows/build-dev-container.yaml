@@ -1,0 +1,340 @@
+name: Build SST Development Container
+
+on:
+  workflow_dispatch:
+    inputs:
+      mpich_version:
+        description: 'MPICH version to use'
+        required: false
+        default: '4.0.2'
+        type: string
+      force_rebuild:
+        description: 'Force rebuild even if container exists'
+        required: false
+        default: false
+        type: boolean
+      ignore_cache:
+        description: 'Ignore cached tarballs and redownload'
+        required: false
+        default: false
+        type: boolean
+      build_platforms:
+        description: 'Platforms to build for'
+        required: false
+        default: 'linux/amd64'
+        type: choice
+        options:
+          - 'linux/amd64'
+          - 'linux/amd64,linux/arm64'
+          - 'linux/arm64'
+      tag_suffix:
+        description: 'Tag suffix (default: latest)'
+        required: false
+        default: 'latest'
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/sst-dev
+  BUILD_NCPUS: 4
+
+jobs:
+  check-existing-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      platforms: ${{ steps.check.outputs.platforms }}
+    steps:
+      - name: Check existing container images
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MPICH_VERSION="${{ inputs.mpich_version }}"
+          TAG_SUFFIX="${{ inputs.tag_suffix }}"
+          FORCE_REBUILD="${{ inputs.force_rebuild }}"
+
+          echo "Checking for existing SST dev containers with MPICH $MPICH_VERSION..."
+
+          # Parse build platforms into JSON array for matrix
+          PLATFORMS="${{ inputs.build_platforms }}"
+          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
+          echo "::notice::Platforms: $PLATFORMS"
+
+          # Function to check if image exists
+          check_image_exists() {
+            local image_name="$1"
+            local tag="$2"
+            echo "Checking for image: $image_name:$tag"
+
+            # List all package versions and check if our tag exists
+            if gh api "/orgs/${{ github.repository_owner }}/packages/container/${image_name}/versions" \
+              --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .metadata.container.tags[]" \
+              2>/dev/null | grep -x "$tag" >/dev/null; then
+              echo "  [FOUND] $image_name:$tag"
+              return 0
+            else
+              echo "  [NOT FOUND] $image_name:$tag"
+              return 1
+            fi
+          }
+
+          # Check if we should build
+          SHOULD_BUILD=false
+
+          # Check each platform
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+          for platform in "${PLATFORM_ARRAY[@]}"; do
+            ARCH="${platform#linux/}"
+            IMAGE_NAME="sst-dev-${ARCH}"
+            
+            if ! check_image_exists "$IMAGE_NAME" "$TAG_SUFFIX" || [ "$FORCE_REBUILD" = "true" ]; then
+              SHOULD_BUILD=true
+              break
+            fi
+          done
+
+          if [ "$FORCE_REBUILD" = "true" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "::notice::Force rebuild enabled - will rebuild containers"
+          else
+            echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
+            if [ "$SHOULD_BUILD" = "true" ]; then
+              echo "::notice::Missing containers detected - will build"
+            else
+              echo "::notice::All containers exist - skipping build"
+            fi
+          fi
+
+  download-sources:
+    runs-on: ubuntu-latest
+    needs: check-existing-images
+    if: needs.check-existing-images.outputs.should_build == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache source tarballs
+        if: inputs.ignore_cache != true
+        uses: actions/cache@v4
+        with:
+          path: Containerfiles/*.tar.gz
+          key: mpich-sources-${{ inputs.mpich_version }}
+          restore-keys: |
+            mpich-sources-
+
+      - name: Download MPICH source tarball
+        run: |
+          cd Containerfiles
+
+          MPICH_VERSION="${{ inputs.mpich_version }}"
+          MPICH_TARBALL="mpich-${MPICH_VERSION}.tar.gz"
+
+          # Remove existing files if ignore_cache is true
+          if [ "${{ inputs.ignore_cache }}" = "true" ]; then
+            echo "Ignoring cache - removing existing tarballs..."
+            rm -f mpich-*.tar.gz
+          fi
+
+          # Download MPICH if not already present
+          if [ ! -f "$MPICH_TARBALL" ]; then
+            echo "Downloading MPICH $MPICH_VERSION..."
+            MPICH_URL="https://www.mpich.org/static/downloads/${MPICH_VERSION}/${MPICH_TARBALL}"
+            wget -O "$MPICH_TARBALL" "$MPICH_URL"
+            echo "[SUCCESS] Downloaded $MPICH_TARBALL"
+          else
+            echo "[CACHED] Using cached $MPICH_TARBALL"
+          fi
+
+          # Verify file exists
+          if [ ! -f "$MPICH_TARBALL" ]; then
+            echo "[ERROR] Failed to download or find $MPICH_TARBALL"
+            exit 1
+          fi
+
+          # List downloaded files
+          echo "Available files:"
+          ls -la mpich-*.tar.gz
+
+      - name: Upload source artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpich-sources-${{ inputs.mpich_version }}
+          path: Containerfiles/mpich-*.tar.gz
+          retention-days: 1
+
+  build-dev-containers:
+    runs-on: ubuntu-latest
+    needs: [check-existing-images, download-sources]
+    if: needs.check-existing-images.outputs.should_build == 'true'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        platform: ${{ fromJson(needs.check-existing-images.outputs.platforms) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download source artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mpich-sources-${{ inputs.mpich_version }}
+          path: Containerfiles/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract platform info
+        id: platform
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM##*/}"
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
+
+      - name: Prepare tags
+        id: tags
+        run: |
+          TAG_SUFFIX="${{ inputs.tag_suffix }}"
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ steps.platform.outputs.arch }}:${TAG_SUFFIX}"
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push dev container
+        uses: docker/build-push-action@v5
+        with:
+          context: Containerfiles
+          file: Containerfiles/Containerfile.dev
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            mpich=${{ inputs.mpich_version }}
+            NCPUS=${{ env.BUILD_NCPUS }}
+          labels: |
+            com.github.sha=${{ github.sha }}
+            com.github.workflow=${{ github.workflow }}
+            com.github.run_id=${{ github.run_id }}
+            com.github.run_number=${{ github.run_number }}
+            com.github.repository=${{ github.repository }}
+            com.github.ref_name=${{ github.ref_name }}
+          tags: ${{ steps.tags.outputs.tags }}
+          push: true
+          cache-from: type=gha,scope=sst-dev-${{ steps.platform.outputs.arch }}
+          cache-to: type=gha,mode=max,scope=sst-dev-${{ steps.platform.outputs.arch }}
+
+  validate-containers:
+    runs-on: ubuntu-latest
+    needs: [check-existing-images, build-dev-containers]
+    if: always() && needs.build-dev-containers.result == 'success'
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        platform: ${{ fromJson(needs.check-existing-images.outputs.platforms) }}
+    steps:
+      - name: Extract architecture from platform
+        id: arch
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM#linux/}"
+          echo "arch=${ARCH}" >> $GITHUB_OUTPUT
+          echo "::notice::Validating architecture: ${ARCH}"
+
+      - name: Validate container
+        run: |
+          TAG_SUFFIX="${{ inputs.tag_suffix }}"
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ steps.arch.outputs.arch }}:${TAG_SUFFIX}"
+
+          echo "Validating container: $IMAGE_NAME"
+
+          # Pull and run basic validation
+          docker pull --platform ${{ matrix.platform }} "$IMAGE_NAME"
+
+          # Test MPICH installation
+          echo "mpicc --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          echo "which mpirun" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+
+          # Test basic build tools
+          echo "gcc --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          echo "python3 --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+
+          # Get image size
+          IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
+          IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))
+
+          echo "Container validation successful!"
+          echo "Image: $IMAGE_NAME"
+          echo "Size: ${IMAGE_SIZE_MB} MB"
+          echo "Platform: ${{ matrix.platform }}"
+          echo "Type: SST Development Environment"
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [check-existing-images, build-dev-containers, validate-containers]
+    if: always()
+    steps:
+      - name: Build Summary
+        run: |
+          echo "# SST Development Container Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**MPICH Version:** ${{ inputs.mpich_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Force Rebuild:** ${{ inputs.force_rebuild }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Ignore Cache:** ${{ inputs.ignore_cache }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Platforms:** ${{ inputs.build_platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag Suffix:** ${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.build-dev-containers.result }}" == "success" ]; then
+            echo "[SUCCESS] **SST Development Containers:** Built successfully" >> $GITHUB_STEP_SUMMARY
+            
+            # List built containers based on platforms
+            PLATFORMS="${{ inputs.build_platforms }}"
+            IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+            for platform in "${PLATFORM_ARRAY[@]}"; do
+              ARCH="${platform#linux/}"
+              echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${ARCH}:${{ inputs.tag_suffix }}\`" >> $GITHUB_STEP_SUMMARY
+            done
+          elif [ "${{ needs.check-existing-images.outputs.should_build }}" == "true" ]; then
+            echo "[FAILED] **SST Development Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "[SKIPPED] **SST Development Containers:** Skipped (already exist)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Container Features" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This development container includes:" >> $GITHUB_STEP_SUMMARY
+          echo "- **MPICH ${{ inputs.mpich_version }}** - MPI implementation" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Tools** - GCC, autotools, CMake dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "- **Development Libraries** - Python3, libfabric, valgrind" >> $GITHUB_STEP_SUMMARY
+          echo "- **SST Environment** - Ready for SST development and compilation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Usage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Use this container for SST development:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Pull the development container" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-amd64:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Run interactively with your SST source mounted" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it -v \$(pwd):/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-amd64:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Use as VS Code devcontainer base image" >> $GITHUB_STEP_SUMMARY
+          echo "# Add to .devcontainer/devcontainer.json:" >> $GITHUB_STEP_SUMMARY
+          echo '# "image": "${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-amd64:${{ inputs.tag_suffix }}"' >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
