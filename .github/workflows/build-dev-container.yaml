@@ -232,7 +232,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=sst-dev-${{ steps.platform.outputs.arch }}
 
   validate-containers:
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm64' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [check-existing-images, build-dev-containers]
     if: always() && needs.build-dev-containers.result == 'success'
     permissions:
