@@ -422,15 +422,21 @@ jobs:
               CORE_MANIFESTS="$CORE_MANIFESTS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${ARCH}:${SST_VERSION}"
             done
 
+            # Remove any existing manifest lists first
+            docker manifest rm ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION} 2>/dev/null || true
+            if [ "$TAG_LATEST" = "true" ]; then
+              docker manifest rm ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest 2>/dev/null || true
+            fi
+
             # Create version-specific manifest
             echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION}"
-            docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION} $CORE_MANIFESTS
+            docker manifest create --amend ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION} $CORE_MANIFESTS
             docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION}
 
             # Create latest manifest if requested
             if [ "$TAG_LATEST" = "true" ]; then
               echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest"
-              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest $CORE_MANIFESTS
+              docker manifest create --amend ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest $CORE_MANIFESTS
               docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest
             fi
 
@@ -446,15 +452,21 @@ jobs:
               FULL_MANIFESTS="$FULL_MANIFESTS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${ARCH}:${SST_VERSION}"
             done
 
+            # Remove any existing manifest lists first
+            docker manifest rm ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION} 2>/dev/null || true
+            if [ "$TAG_LATEST" = "true" ]; then
+              docker manifest rm ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest 2>/dev/null || true
+            fi
+
             # Create version-specific manifest
             echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION}"
-            docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION} $FULL_MANIFESTS
+            docker manifest create --amend ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION} $FULL_MANIFESTS
             docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION}
 
             # Create latest manifest if requested
             if [ "$TAG_LATEST" = "true" ]; then
               echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest"
-              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest $FULL_MANIFESTS
+              docker manifest create --amend ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest $FULL_MANIFESTS
               docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest
             fi
 
