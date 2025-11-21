@@ -272,9 +272,53 @@ jobs:
           echo "Platform: ${{ matrix.platform }}"
           echo "Type: SST-${BUILD_TYPE}"
 
+  create-manifest-lists:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, build-custom-containers]
+    if: needs.build-custom-containers.result == 'success'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-architecture manifest lists
+        run: |
+          BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
+          TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
+
+          # Determine which platforms were built
+          PLATFORMS="${{ inputs.build_platforms }}"
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+
+          echo "Creating manifest lists for platforms: ${PLATFORMS}"
+          echo "Build type: ${BUILD_TYPE}"
+          echo "Tag suffix: ${TAG_SUFFIX}"
+
+          # Collect architecture-specific images
+          MANIFESTS=""
+          for platform in "${PLATFORM_ARRAY[@]}"; do
+            ARCH="${platform#linux/}"
+            MANIFESTS="$MANIFESTS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${ARCH}:${TAG_SUFFIX}"
+          done
+
+          # Create multi-arch manifest
+          MANIFEST_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}:${TAG_SUFFIX}"
+          echo "Creating manifest: ${MANIFEST_NAME}"
+          docker manifest create ${MANIFEST_NAME} $MANIFESTS
+          docker manifest push ${MANIFEST_NAME}
+
+          echo "[SUCCESS] Custom SST manifest list created successfully"
+          echo "Users can now pull: ${MANIFEST_NAME}"
+
   summary:
     runs-on: ubuntu-latest
-    needs: [validate-inputs, build-custom-containers, validate-containers]
+    needs: [validate-inputs, build-custom-containers, validate-containers, create-manifest-lists]
     if: always()
     permissions:
       contents: read
