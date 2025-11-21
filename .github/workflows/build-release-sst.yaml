@@ -57,6 +57,13 @@ jobs:
       should_build_full: ${{ steps.check.outputs.should_build_full }}
       platforms: ${{ steps.check.outputs.platforms }}
     steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Check existing container images
         id: check
         env:
@@ -78,10 +85,8 @@ jobs:
             local tag="$2"
             echo "Checking for image: $image_name:$tag"
 
-            # List all package versions and check if our tag exists
-            if gh api "/orgs/${{ github.repository_owner }}/packages/container/${image_name}/versions" \
-              --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .metadata.container.tags[]" \
-              2>/dev/null | grep -x "$tag" >/dev/null; then
+            # Try to pull the image manifest to check if it exists
+            if docker manifest inspect ${{ env.REGISTRY }}/${{ github.repository_owner }}/${image_name}:${tag} >/dev/null 2>&1; then
               echo "  [FOUND] $image_name:$tag"
               return 0
             else
