@@ -382,9 +382,83 @@ jobs:
           echo "Platform: ${{ matrix.platform }}"
           echo "Type: SST-${{ matrix.type }}"
 
+  create-manifest-lists:
+    runs-on: ubuntu-latest
+    needs: [check-existing-images, build-core-containers, build-full-containers]
+    if: always() && (needs.build-core-containers.result == 'success' || needs.build-full-containers.result == 'success')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-architecture manifest lists
+        run: |
+          SST_VERSION="${{ inputs.sst_version }}"
+          TAG_LATEST="${{ inputs.tag_as_latest }}"
+
+          # Determine which platforms were built
+          PLATFORMS="${{ inputs.build_platforms }}"
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+
+          echo "Creating manifest lists for platforms: ${PLATFORMS}"
+
+          # Create core manifest if core was built
+          if [ "${{ needs.build-core-containers.result }}" = "success" ]; then
+            echo "Creating ar-sst-core manifest lists..."
+            CORE_MANIFESTS=""
+            for platform in "${PLATFORM_ARRAY[@]}"; do
+              ARCH="${platform#linux/}"
+              CORE_MANIFESTS="$CORE_MANIFESTS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${ARCH}:${SST_VERSION}"
+            done
+
+            # Create version-specific manifest
+            echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION}"
+            docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION} $CORE_MANIFESTS
+            docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION}
+
+            # Create latest manifest if requested
+            if [ "$TAG_LATEST" = "true" ]; then
+              echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest"
+              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest $CORE_MANIFESTS
+              docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest
+            fi
+
+            echo "[SUCCESS] ar-sst-core manifest lists created successfully"
+          fi
+
+          # Create full manifest if full was built
+          if [ "${{ needs.build-full-containers.result }}" = "success" ]; then
+            echo "Creating ar-sst-full manifest lists..."
+            FULL_MANIFESTS=""
+            for platform in "${PLATFORM_ARRAY[@]}"; do
+              ARCH="${platform#linux/}"
+              FULL_MANIFESTS="$FULL_MANIFESTS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${ARCH}:${SST_VERSION}"
+            done
+
+            # Create version-specific manifest
+            echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION}"
+            docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION} $FULL_MANIFESTS
+            docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION}
+
+            # Create latest manifest if requested
+            if [ "$TAG_LATEST" = "true" ]; then
+              echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest"
+              docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest $FULL_MANIFESTS
+              docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest
+            fi
+
+            echo "[SUCCESS] ar-sst-full manifest lists created successfully"
+          fi
+
   summary:
     runs-on: ubuntu-latest
-    needs: [check-existing-images, build-core-containers, build-full-containers, validate-containers]
+    needs: [check-existing-images, build-core-containers, build-full-containers, validate-containers, create-manifest-lists]
     if: always()
     steps:
       - name: Build Summary
@@ -405,8 +479,14 @@ jobs:
           # Core containers
           if [ "${{ needs.build-core-containers.result }}" == "success" ]; then
             echo "[SUCCESS] **SST-Core Containers:** Built successfully" >> $GITHUB_STEP_SUMMARY
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-amd64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-arm64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ needs.create-manifest-lists.result }}" == "success" ]; then
+              echo "- **Multi-arch**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+              if [ "${{ inputs.tag_as_latest }}" = "true" ]; then
+                echo "- **Latest**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+            echo "- **AMD64**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-amd64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **ARM64**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-arm64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ needs.check-existing-images.outputs.should_build_core }}" == "true" ]; then
             echo "[FAILED] **SST-Core Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
           else
@@ -418,8 +498,14 @@ jobs:
           # Full containers
           if [ "${{ needs.build-full-containers.result }}" == "success" ]; then
             echo "[SUCCESS] **SST-Full Containers:** Built successfully" >> $GITHUB_STEP_SUMMARY
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-arm64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ needs.create-manifest-lists.result }}" == "success" ]; then
+              echo "- **Multi-arch**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+              if [ "${{ inputs.tag_as_latest }}" = "true" ]; then
+                echo "- **Latest**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+            echo "- **AMD64**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **ARM64**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-arm64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ needs.check-existing-images.outputs.should_build_full }}" == "true" ]; then
             echo "[FAILED] **SST-Full Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
           else
@@ -431,9 +517,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Pull and use the containers:" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# SST-Core only (smaller image)" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "# Multi-architecture - automatically selects right platform" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Full SST with elements (larger image)" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# SST with Elements (full simulation capabilities)" >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
