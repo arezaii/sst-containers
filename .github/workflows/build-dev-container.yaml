@@ -167,7 +167,7 @@ jobs:
           retention-days: 1
 
   build-dev-containers:
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm64' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [check-existing-images, download-sources]
     if: needs.check-existing-images.outputs.should_build == 'true'
     permissions:
