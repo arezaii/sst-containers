@@ -79,33 +79,43 @@ jobs:
           echo "- Tag as Latest: $TAG_LATEST"
           echo ""
 
-          # Function to create manifest list
+          # Function to create manifest list using buildx imagetools
           create_manifest() {
             local image_base="$1"
             local tag="$2"
-            local arch_images=""
 
             echo "Creating manifest for: ${image_base}:${tag}"
 
-            # Collect architecture-specific images
+            # Build list of source images
+            local source_images=""
             for platform in "${PLATFORM_ARRAY[@]}"; do
               ARCH="${platform#linux/}"
-              arch_images="$arch_images ${{ env.REGISTRY }}/${image_base}-${ARCH}:${tag}"
+              SOURCE_IMAGE="${{ env.REGISTRY }}/${image_base}-${ARCH}:${tag}"
+
+              echo "  Checking: $SOURCE_IMAGE"
+              if docker manifest inspect "$SOURCE_IMAGE" >/dev/null 2>&1; then
+                source_images="$source_images $SOURCE_IMAGE"
+                echo "    ✓ Found"
+              else
+                echo "    ✗ Not found"
+              fi
             done
 
-            # Remove existing manifest if it exists
-            docker manifest rm ${{ env.REGISTRY }}/${image_base}:${tag} 2>/dev/null || true
+            if [ -z "$source_images" ]; then
+              echo "  [ERROR] No source images found for $image_base:$tag"
+              return 1
+            fi
 
-            # Create new manifest
-            echo "  Source images: $arch_images"
-            docker manifest create --amend ${{ env.REGISTRY }}/${image_base}:${tag} $arch_images
-            docker manifest push ${{ env.REGISTRY }}/${image_base}:${tag}
+            echo "  Creating multi-arch manifest from:$source_images"
+
+            # Use buildx imagetools to create the multi-arch manifest
+            docker buildx imagetools create \
+              --tag ${{ env.REGISTRY }}/${image_base}:${tag} \
+              $source_images
 
             echo "  [SUCCESS] Created: ${{ env.REGISTRY }}/${image_base}:${tag}"
             echo ""
-          }
-
-          # Process each container type
+          }          # Process each container type
           for container_type in "${TYPE_ARRAY[@]}"; do
             case "$container_type" in
               "core")
