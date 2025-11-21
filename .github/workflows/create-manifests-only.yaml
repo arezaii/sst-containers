@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       sst_version:
-        description: 'SST version to create manifests for (e.g., 15.1.0, 14.1.0)'
-        required: true
+        description: 'SST version to create manifests for (e.g., 15.1.0, 14.1.0) - not required for experiments'
+        required: false
         type: string
       mpich_version:
         description: 'MPICH version (for dev containers)'
@@ -81,6 +81,25 @@ jobs:
           # Parse container types into array
           IFS=',' read -ra TYPE_ARRAY <<< "$CONTAINER_TYPES"
 
+          # Validate required inputs based on container types
+          for container_type in "${TYPE_ARRAY[@]}"; do
+            case "$container_type" in
+              "core"|"full"|"dev")
+                if [ -z "$SST_VERSION" ]; then
+                  echo "[ERROR] sst_version is required when container_types includes 'core', 'full', or 'dev'"
+                  exit 1
+                fi
+                ;;
+              "experiment")
+                EXPERIMENT_NAME="${{ inputs.experiment_name }}"
+                if [ -z "$EXPERIMENT_NAME" ]; then
+                  echo "[ERROR] experiment_name is required when container_types includes 'experiment'"
+                  exit 1
+                fi
+                ;;
+            esac
+          done
+
           echo "Creating manifest lists for:"
           echo "- SST Version: $SST_VERSION"
           echo "- MPICH Version: $MPICH_VERSION"
@@ -96,19 +115,33 @@ jobs:
 
             echo "Creating manifest for: ${image_base}:${tag}"
 
-            # Build list of source images
+            # Build list of source images (ARM64 first for preferred ordering)
             local source_images=""
+            local found_images=""
+
+            # First pass: collect all available images
             for platform in "${PLATFORM_ARRAY[@]}"; do
               ARCH="${platform#linux/}"
               SOURCE_IMAGE="${{ env.REGISTRY }}/${image_base}-${ARCH}:${tag}"
 
               echo "  Checking: $SOURCE_IMAGE"
               if docker manifest inspect "$SOURCE_IMAGE" >/dev/null 2>&1; then
-                source_images="$source_images $SOURCE_IMAGE"
-                echo "    ✓ Found"
+                found_images="$found_images $ARCH:$SOURCE_IMAGE"
+                echo "    [OK] Found"
               else
-                echo "    ✗ Not found"
+                echo "    [MISS] Not found"
               fi
+            done
+
+            # Second pass: add images in preferred order (ARM64 first, then AMD64)
+            for preferred_arch in "arm64" "amd64"; do
+              for img_entry in $found_images; do
+                arch="${img_entry%%:*}"
+                img="${img_entry#*:}"
+                if [ "$arch" = "$preferred_arch" ]; then
+                  source_images="$source_images $img"
+                fi
+              done
             done
 
             if [ -z "$source_images" ]; then
@@ -150,10 +183,6 @@ jobs:
               "experiment")
                 EXPERIMENT_NAME="${{ inputs.experiment_name }}"
                 EXPERIMENT_TAG="${{ inputs.experiment_tag }}"
-                if [ -z "$EXPERIMENT_NAME" ]; then
-                  echo "[ERROR] experiment_name is required when container_types includes 'experiment'"
-                  exit 1
-                fi
                 create_manifest "${{ github.repository_owner }}/$EXPERIMENT_NAME" "$EXPERIMENT_TAG"
                 ;;
             esac
