@@ -85,7 +85,7 @@ jobs:
           find "$EXPERIMENT" -type f -exec ls -lh {} \;
 
   build-experiment-container:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.build_platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: validate-experiment
     if: needs.validate-experiment.outputs.experiment_exists == 'true'
     permissions:
@@ -165,7 +165,6 @@ jobs:
         with:
           context: ${{ inputs.experiment_name }}
           file: ${{ inputs.experiment_name }}/Containerfile
-          platforms: ${{ inputs.build_platform }}
           labels: |
             com.github.sha=${{ github.sha }}
             com.github.workflow=${{ github.workflow }}
@@ -184,7 +183,6 @@ jobs:
         with:
           context: ${{ inputs.experiment_name }}
           file: ${{ steps.prepare.outputs.containerfile }}
-          platforms: ${{ inputs.build_platform }}
           build-args: |
             BASE_IMAGE=${{ steps.prepare.outputs.base_image }}
             EXPERIMENT_NAME=${{ inputs.experiment_name }}

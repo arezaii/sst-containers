@@ -147,7 +147,7 @@ jobs:
           retention-days: 1
 
   build-custom-containers:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [validate-inputs, download-mpich]
     permissions:
       contents: read
@@ -210,7 +210,6 @@ jobs:
         with:
           context: Containerfiles
           file: Containerfiles/Containerfile.tag
-          platforms: ${{ matrix.platform }}
           target: ${{ steps.build_info.outputs.target }}
           build-args: |
             SSTrepo=${{ inputs.sst_core_repo }}
@@ -232,7 +231,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=sst-custom-${{ needs.validate-inputs.outputs.build_type }}-${{ steps.platform.outputs.arch }}
 
   validate-containers:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [validate-inputs, build-custom-containers]
     permissions:
       contents: read
@@ -257,11 +256,11 @@ jobs:
           echo "Validating container: $IMAGE_NAME"
 
           # Pull and run basic validation
-          docker pull --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          docker pull "$IMAGE_NAME"
 
           # Test SST installation
-          echo "sst --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
-          echo "sst-info --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          echo "sst --version" | docker run --rm -i "$IMAGE_NAME"
+          echo "sst-info --version" | docker run --rm -i "$IMAGE_NAME"
 
           # Get image size
           IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')

@@ -183,7 +183,7 @@ jobs:
           retention-days: 1
 
   build-core-containers:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [check-existing-images, download-sources]
     if: needs.check-existing-images.outputs.should_build_core == 'true'
     permissions:
@@ -234,7 +234,6 @@ jobs:
         with:
           context: Containerfiles
           file: Containerfiles/Containerfile
-          platforms: ${{ matrix.platform }}
           target: sst-core
           build-args: |
             SSTver=${{ inputs.sst_version }}
@@ -253,7 +252,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=sst-core-${{ steps.platform.outputs.arch }}
 
   build-full-containers:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [check-existing-images, download-sources]
     if: needs.check-existing-images.outputs.should_build_full == 'true'
     permissions:
@@ -304,7 +303,6 @@ jobs:
         with:
           context: Containerfiles
           file: Containerfiles/Containerfile
-          platforms: ${{ matrix.platform }}
           target: sst-full
           build-args: |
             SSTver=${{ inputs.sst_version }}
@@ -323,7 +321,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=sst-full-${{ steps.platform.outputs.arch }}
 
   validate-containers:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [check-existing-images, build-core-containers, build-full-containers]
     if: always() && (needs.build-core-containers.result == 'success' || needs.build-full-containers.result == 'success')
     permissions:
@@ -368,11 +366,11 @@ jobs:
           echo "Validating container: $IMAGE_NAME"
 
           # Pull and run basic validation
-          docker pull --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          docker pull "$IMAGE_NAME"
 
           # Test SST installation
-          echo "sst --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
-          echo "sst-info --version" | docker run --rm -i --platform ${{ matrix.platform }} "$IMAGE_NAME"
+          echo "sst --version" | docker run --rm -i "$IMAGE_NAME"
+          echo "sst-info --version" | docker run --rm -i "$IMAGE_NAME"
 
           # Get image size
           IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
