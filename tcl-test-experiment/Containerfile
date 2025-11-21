@@ -9,30 +9,28 @@
 # - MPI runtime and libraries
 # - All SST core and elements installations
 #
-# BUILD ARGUMENTS: (TODO: UPDATE IMAGE SOURCE LOCATIONS)
-#   SST_14_IMAGE: SST 14.1.0 full image (default: sst-full:14.1.0)
-#   SST_15_IMAGE: SST 15.0.0 full image (default: arezaiihpe/sst-full:15.0.0)
+# BUILD ARGUMENTS:
+#   SST_14_IMAGE: SST 14.1.0 full image (default: ghcr.io/arezaii/ar-sst-full:14.1.0)
+#   SST_15_IMAGE: SST 15.0.0 full image (default: ghcr.io/arezaii/ar-sst-full:15.0.0)
 #
 # RUNTIME ENVIRONMENT VARIABLES:
 #   SST_VERSION: Choose SST version at runtime (14.1.0 or 15.0.0, default: 15.0.0)
 #
 # EXAMPLE BUILD:
-# docker build -f Containerfile.reuse -t sst-multi-reuse:latest .
+# docker build -f Containerfile -t tcl-test-experiment:latest .
 #
 # EXAMPLE USAGE:
 # # Use SST 15.0.0 (default)
-# docker run -it sst-multi-reuse:latest
+# docker run -it tcl-test-experiment:latest
 #
 # # Use SST 14.1.0
-# docker run -it -e SST_VERSION=14.1.0 sst-multi-reuse:latest
+# docker run -it -e SST_VERSION=14.1.0 tcl-test-experiment:latest
 #
-# # Check available versions
-# docker run --rm sst-multi-reuse:latest sst-info --version
 
 # Build arguments for specifying which SST images to use
-# Using sst-full images that include both SST core and SST elements
-ARG SST_14_IMAGE=ghcr.io/arezaii/ar-sst-full-amd64:14.1.0
-ARG SST_15_IMAGE=ghcr.io/arezaii/ar-sst-full-amd64:15.0.0
+# Using ar-sst-full images that include both SST core and SST elements
+ARG SST_14_IMAGE=ghcr.io/arezaii/ar-sst-full:14.1.0
+ARG SST_15_IMAGE=ghcr.io/arezaii/ar-sst-full:15.0.0
 
 # --- Extract SST 14.1.0 from existing image ---
 FROM ${SST_14_IMAGE} AS sst-14-extract
