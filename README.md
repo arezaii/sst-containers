@@ -13,8 +13,13 @@ Build containerized SST (Structural Simulation Toolkit) environments.
 
 ### Use Pre-built Containers
 ```bash
-docker pull ghcr.io/arezaii/ar-sst-core-amd64:15.1.0
-docker run -it ghcr.io/arezaii/ar-sst-core-amd64:15.1.0
+# Automatically pulls the right architecture for your platform
+docker pull ghcr.io/arezaii/ar-sst-core:15.1.0
+docker run -it ghcr.io/arezaii/ar-sst-core:15.1.0
+
+# Or pull the development environment
+docker pull ghcr.io/arezaii/sst-dev:latest
+docker run -it ghcr.io/arezaii/sst-dev:latest
 ```
 
 ### Build Containers via GitHub Actions
@@ -31,16 +36,22 @@ Go to Actions tab and select:
 
 ## Container Types
 
-- **Release**: `ghcr.io/arezaii/ar-sst-core-amd64:15.1.0` (official SST versions)
-- **Development**: `ghcr.io/arezaii/sst-dev-amd64:latest` (build environment with dependencies)
-- **Custom**: `ghcr.io/arezaii/ar-sst-core-amd64:custom-a1b2c3d` (custom SST from git sources)
-- **Experiment**: `ghcr.io/arezaii/my-experiment-amd64:latest` (your scripts, SST optional if Containerfile provided)
+- **Release**: `ghcr.io/arezaii/ar-sst-core:15.1.0` (official SST versions, multi-arch)
+- **Development**: `ghcr.io/arezaii/sst-dev:latest` (build environment with dependencies, multi-arch)
+- **Custom**: `ghcr.io/arezaii/ar-sst-core:custom-a1b2c3d` (custom SST from git sources, multi-arch)
+- **Experiment**: `ghcr.io/arezaii/my-experiment:latest` (your scripts, architecture-specific)
+
+### Architecture-Specific Tags (Advanced)
+If you need a specific architecture, you can still pull:
+- **AMD64**: `ghcr.io/arezaii/ar-sst-core-amd64:15.1.0`
+- **ARM64**: `ghcr.io/arezaii/ar-sst-core-arm64:15.1.0`
 
 ## Automated Building & Packaging
 
 The GitHub Actions workflows provide consistent, automated container builds:
 
-- **Multi-architecture support**: Builds for both `linux/amd64` and `linux/arm64` platforms
+- **Multi-architecture support**: Builds for both `linux/amd64` and `linux/arm64` platforms using native runners
+- **Automatic platform detection**: Multi-architecture manifest lists allow `docker pull` to automatically select the right architecture
 - **Automatic metadata**: Injects build information, source URLs, and commit SHAs as container labels
 - **Consistent tagging**: Uses git references for reproducible builds
 - **Dependency caching**: Optimizes build times by caching MPICH and other dependencies
