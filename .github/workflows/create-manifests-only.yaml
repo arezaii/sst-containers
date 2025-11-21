@@ -1,0 +1,192 @@
+name: Create Multi-Architecture Manifests (Existing Images)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sst_version:
+        description: 'SST version to create manifests for (e.g., 15.1.0, 14.1.0)'
+        required: true
+        type: string
+      mpich_version:
+        description: 'MPICH version (for dev containers)'
+        required: false
+        default: '4.0.2'
+        type: string
+      container_types:
+        description: 'Container types to create manifests for'
+        required: false
+        default: 'core,full,dev'
+        type: choice
+        options:
+          - 'core,full,dev'
+          - 'core,full'
+          - 'core'
+          - 'full'
+          - 'dev'
+      platforms:
+        description: 'Platforms to include in manifest'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: choice
+        options:
+          - 'linux/amd64,linux/arm64'
+          - 'linux/amd64'
+          - 'linux/arm64'
+      tag_as_latest:
+        description: 'Also create "latest" manifests'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  RELEASE_IMAGE_PREFIX: ${{ github.repository_owner }}/ar-sst
+  DEV_IMAGE_PREFIX: ${{ github.repository_owner }}/sst-dev
+
+jobs:
+  create-manifests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-architecture manifest lists
+        run: |
+          SST_VERSION="${{ inputs.sst_version }}"
+          MPICH_VERSION="${{ inputs.mpich_version }}"
+          TAG_LATEST="${{ inputs.tag_as_latest }}"
+          CONTAINER_TYPES="${{ inputs.container_types }}"
+
+          # Parse platforms into array
+          PLATFORMS="${{ inputs.platforms }}"
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+
+          # Parse container types into array
+          IFS=',' read -ra TYPE_ARRAY <<< "$CONTAINER_TYPES"
+
+          echo "Creating manifest lists for:"
+          echo "- SST Version: $SST_VERSION"
+          echo "- MPICH Version: $MPICH_VERSION"
+          echo "- Container Types: $CONTAINER_TYPES"
+          echo "- Platforms: $PLATFORMS"
+          echo "- Tag as Latest: $TAG_LATEST"
+          echo ""
+
+          # Function to create manifest list
+          create_manifest() {
+            local image_base="$1"
+            local tag="$2"
+            local arch_images=""
+
+            echo "Creating manifest for: ${image_base}:${tag}"
+
+            # Collect architecture-specific images
+            for platform in "${PLATFORM_ARRAY[@]}"; do
+              ARCH="${platform#linux/}"
+              arch_images="$arch_images ${{ env.REGISTRY }}/${image_base}-${ARCH}:${tag}"
+            done
+
+            # Remove existing manifest if it exists
+            docker manifest rm ${{ env.REGISTRY }}/${image_base}:${tag} 2>/dev/null || true
+
+            # Create new manifest
+            echo "  Source images: $arch_images"
+            docker manifest create --amend ${{ env.REGISTRY }}/${image_base}:${tag} $arch_images
+            docker manifest push ${{ env.REGISTRY }}/${image_base}:${tag}
+
+            echo "  [SUCCESS] Created: ${{ env.REGISTRY }}/${image_base}:${tag}"
+            echo ""
+          }
+
+          # Process each container type
+          for container_type in "${TYPE_ARRAY[@]}"; do
+            case "$container_type" in
+              "core")
+                create_manifest "${{ env.RELEASE_IMAGE_PREFIX }}-core" "$SST_VERSION"
+                if [ "$TAG_LATEST" = "true" ]; then
+                  create_manifest "${{ env.RELEASE_IMAGE_PREFIX }}-core" "latest"
+                fi
+                ;;
+              "full")
+                create_manifest "${{ env.RELEASE_IMAGE_PREFIX }}-full" "$SST_VERSION"
+                if [ "$TAG_LATEST" = "true" ]; then
+                  create_manifest "${{ env.RELEASE_IMAGE_PREFIX }}-full" "latest"
+                fi
+                ;;
+              "dev")
+                create_manifest "${{ env.DEV_IMAGE_PREFIX }}" "latest"
+                # Also create MPICH-specific tag if different from latest
+                if [ "$MPICH_VERSION" != "4.0.2" ]; then
+                  create_manifest "${{ env.DEV_IMAGE_PREFIX }}" "mpich-$MPICH_VERSION"
+                fi
+                ;;
+            esac
+          done
+
+          echo "================================"
+          echo "All manifest lists created successfully!"
+          echo ""
+          echo "Users can now pull:"
+          for container_type in "${TYPE_ARRAY[@]}"; do
+            case "$container_type" in
+              "core")
+                echo "  docker pull ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-core:$SST_VERSION"
+                if [ "$TAG_LATEST" = "true" ]; then
+                  echo "  docker pull ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-core:latest"
+                fi
+                ;;
+              "full")
+                echo "  docker pull ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-full:$SST_VERSION"
+                if [ "$TAG_LATEST" = "true" ]; then
+                  echo "  docker pull ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-full:latest"
+                fi
+                ;;
+              "dev")
+                echo "  docker pull ${{ env.REGISTRY }}/${{ env.DEV_IMAGE_PREFIX }}:latest"
+                ;;
+            esac
+          done
+
+      - name: Verify manifests
+        run: |
+          SST_VERSION="${{ inputs.sst_version }}"
+          CONTAINER_TYPES="${{ inputs.container_types }}"
+          TAG_LATEST="${{ inputs.tag_as_latest }}"
+
+          IFS=',' read -ra TYPE_ARRAY <<< "$CONTAINER_TYPES"
+
+          echo "Verifying created manifests:"
+          echo ""
+
+          for container_type in "${TYPE_ARRAY[@]}"; do
+            case "$container_type" in
+              "core")
+                echo "=== AR-SST-CORE:$SST_VERSION ==="
+                docker manifest inspect ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-core:$SST_VERSION --verbose | grep -E "(mediaType|platform)"
+                if [ "$TAG_LATEST" = "true" ]; then
+                  echo "=== AR-SST-CORE:LATEST ==="
+                  docker manifest inspect ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-core:latest --verbose | grep -E "(mediaType|platform)"
+                fi
+                ;;
+              "full")
+                echo "=== AR-SST-FULL:$SST_VERSION ==="
+                docker manifest inspect ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-full:$SST_VERSION --verbose | grep -E "(mediaType|platform)"
+                if [ "$TAG_LATEST" = "true" ]; then
+                  echo "=== AR-SST-FULL:LATEST ==="
+                  docker manifest inspect ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-full:latest --verbose | grep -E "(mediaType|platform)"
+                fi
+                ;;
+              "dev")
+                echo "=== SST-DEV:LATEST ==="
+                docker manifest inspect ${{ env.REGISTRY }}/${{ env.DEV_IMAGE_PREFIX }}:latest --verbose | grep -E "(mediaType|platform)"
+                ;;
+            esac
+            echo ""
+          done
