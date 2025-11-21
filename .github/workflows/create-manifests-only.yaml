@@ -23,6 +23,16 @@ on:
           - 'core'
           - 'full'
           - 'dev'
+          - 'experiment'
+      experiment_name:
+        description: 'Experiment name (required if container_types includes "experiment")'
+        required: false
+        type: string
+      experiment_tag:
+        description: 'Experiment tag (default: latest)'
+        required: false
+        default: 'latest'
+        type: string
       platforms:
         description: 'Platforms to include in manifest'
         required: false
@@ -137,6 +147,15 @@ jobs:
                   create_manifest "${{ env.DEV_IMAGE_PREFIX }}" "mpich-$MPICH_VERSION"
                 fi
                 ;;
+              "experiment")
+                EXPERIMENT_NAME="${{ inputs.experiment_name }}"
+                EXPERIMENT_TAG="${{ inputs.experiment_tag }}"
+                if [ -z "$EXPERIMENT_NAME" ]; then
+                  echo "[ERROR] experiment_name is required when container_types includes 'experiment'"
+                  exit 1
+                fi
+                create_manifest "${{ github.repository_owner }}/$EXPERIMENT_NAME" "$EXPERIMENT_TAG"
+                ;;
             esac
           done
 
@@ -160,6 +179,11 @@ jobs:
                 ;;
               "dev")
                 echo "  docker pull ${{ env.REGISTRY }}/${{ env.DEV_IMAGE_PREFIX }}:latest"
+                ;;
+              "experiment")
+                EXPERIMENT_NAME="${{ inputs.experiment_name }}"
+                EXPERIMENT_TAG="${{ inputs.experiment_tag }}"
+                echo "  docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/$EXPERIMENT_NAME:$EXPERIMENT_TAG"
                 ;;
             esac
           done
@@ -196,6 +220,12 @@ jobs:
               "dev")
                 echo "=== SST-DEV:LATEST ==="
                 docker manifest inspect ${{ env.REGISTRY }}/${{ env.DEV_IMAGE_PREFIX }}:latest --verbose | grep -E "(mediaType|platform)"
+                ;;
+              "experiment")
+                EXPERIMENT_NAME="${{ inputs.experiment_name }}"
+                EXPERIMENT_TAG="${{ inputs.experiment_tag }}"
+                echo "=== $EXPERIMENT_NAME:$EXPERIMENT_TAG ==="
+                docker manifest inspect ${{ env.REGISTRY }}/${{ github.repository_owner }}/$EXPERIMENT_NAME:$EXPERIMENT_TAG --verbose | grep -E "(mediaType|platform)"
                 ;;
             esac
             echo ""
