@@ -398,6 +398,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Install jq for manifest parsing
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Log in to Container Registry
         uses: docker/login-action@v3
         with:
@@ -420,19 +423,47 @@ jobs:
           if [ "${{ needs.build-core-containers.result }}" = "success" ]; then
             echo "Creating ar-sst-core manifest lists..."
             CORE_MANIFESTS=""
+
+            # Check each architecture-specific image and collect available ones
             for platform in "${PLATFORM_ARRAY[@]}"; do
               ARCH="${platform#linux/}"
-              CORE_MANIFESTS="$CORE_MANIFESTS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${ARCH}:${SST_VERSION}"
+              ARCH_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${ARCH}:${SST_VERSION}"
+
+              echo "Checking: $ARCH_IMAGE"
+              if docker manifest inspect "$ARCH_IMAGE" >/dev/null 2>&1; then
+                # Check if this is a manifest list with multiple manifests
+                MANIFEST_COUNT=$(docker manifest inspect "$ARCH_IMAGE" --verbose | jq '. | length')
+                if [ "$MANIFEST_COUNT" -gt 1 ]; then
+                  echo "  [INFO] $ARCH_IMAGE is a manifest list with $MANIFEST_COUNT manifests"
+                  # Extract the actual image manifest (not the attestation)
+                  ACTUAL_IMAGE=$(docker manifest inspect "$ARCH_IMAGE" --verbose | jq -r '.[] | select(.Descriptor.platform.architecture != "unknown") | .Ref')
+                  if [ -n "$ACTUAL_IMAGE" ] && [ "$ACTUAL_IMAGE" != "null" ]; then
+                    CORE_MANIFESTS="$CORE_MANIFESTS $ACTUAL_IMAGE"
+                    echo "  [OK] Extracted actual image: $ACTUAL_IMAGE"
+                  else
+                    echo "  [SKIP] Could not extract actual image from manifest list"
+                  fi
+                else
+                  CORE_MANIFESTS="$CORE_MANIFESTS $ARCH_IMAGE"
+                  echo "  [OK] Added single-platform image: $ARCH_IMAGE"
+                fi
+              else
+                echo "  [MISS] $ARCH_IMAGE not found"
+              fi
             done
 
-            # Create version-specific manifest using buildx imagetools (cleaner, no untagged images)
-            echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION}"
-            docker buildx imagetools create \
-              --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION} \
-              $CORE_MANIFESTS
+            # Only create manifest if we have source images
+            if [ -n "$CORE_MANIFESTS" ]; then
+              echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION}"
+              docker buildx imagetools create \
+                --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION} \
+                $CORE_MANIFESTS
+            else
+              echo "[ERROR] No valid source images found for core manifest"
+            fi
 
             # Create latest manifest if requested
-            if [ "$TAG_LATEST" = "true" ]; then
+            if [ "$TAG_LATEST" = "true" ] && [ -n "$CORE_MANIFESTS" ]; then
               echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest"
               docker buildx imagetools create \
                 --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest \
@@ -446,19 +477,47 @@ jobs:
           if [ "${{ needs.build-full-containers.result }}" = "success" ]; then
             echo "Creating ar-sst-full manifest lists..."
             FULL_MANIFESTS=""
+
+            # Check each architecture-specific image and collect available ones
             for platform in "${PLATFORM_ARRAY[@]}"; do
               ARCH="${platform#linux/}"
-              FULL_MANIFESTS="$FULL_MANIFESTS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${ARCH}:${SST_VERSION}"
+              ARCH_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${ARCH}:${SST_VERSION}"
+
+              echo "Checking: $ARCH_IMAGE"
+              if docker manifest inspect "$ARCH_IMAGE" >/dev/null 2>&1; then
+                # Check if this is a manifest list with multiple manifests
+                MANIFEST_COUNT=$(docker manifest inspect "$ARCH_IMAGE" --verbose | jq '. | length')
+                if [ "$MANIFEST_COUNT" -gt 1 ]; then
+                  echo "  [INFO] $ARCH_IMAGE is a manifest list with $MANIFEST_COUNT manifests"
+                  # Extract the actual image manifest (not the attestation)
+                  ACTUAL_IMAGE=$(docker manifest inspect "$ARCH_IMAGE" --verbose | jq -r '.[] | select(.Descriptor.platform.architecture != "unknown") | .Ref')
+                  if [ -n "$ACTUAL_IMAGE" ] && [ "$ACTUAL_IMAGE" != "null" ]; then
+                    FULL_MANIFESTS="$FULL_MANIFESTS $ACTUAL_IMAGE"
+                    echo "  [OK] Extracted actual image: $ACTUAL_IMAGE"
+                  else
+                    echo "  [SKIP] Could not extract actual image from manifest list"
+                  fi
+                else
+                  FULL_MANIFESTS="$FULL_MANIFESTS $ARCH_IMAGE"
+                  echo "  [OK] Added single-platform image: $ARCH_IMAGE"
+                fi
+              else
+                echo "  [MISS] $ARCH_IMAGE not found"
+              fi
             done
 
-            # Create version-specific manifest using buildx imagetools (cleaner, no untagged images)
-            echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION}"
-            docker buildx imagetools create \
-              --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION} \
-              $FULL_MANIFESTS
+            # Only create manifest if we have source images
+            if [ -n "$FULL_MANIFESTS" ]; then
+              echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION}"
+              docker buildx imagetools create \
+                --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION} \
+                $FULL_MANIFESTS
+            else
+              echo "[ERROR] No valid source images found for full manifest"
+            fi
 
             # Create latest manifest if requested
-            if [ "$TAG_LATEST" = "true" ]; then
+            if [ "$TAG_LATEST" = "true" ] && [ -n "$FULL_MANIFESTS" ]; then
               echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest"
               docker buildx imagetools create \
                 --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest \
