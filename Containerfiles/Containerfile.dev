@@ -46,6 +46,7 @@ RUN apt update && apt install -y \
     libfabric-dev \
     graphviz \
     libgraphviz-dev \
+    pkg-config \
     valgrind \
     vim \
     wget \
