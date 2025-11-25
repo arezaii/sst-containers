@@ -44,6 +44,8 @@ RUN apt update && apt install -y \
     libtool \
     libtool-bin \
     libfabric-dev \
+    graphviz \
+    libgraphviz-dev \
     valgrind \
     vim \
     wget \
