@@ -95,27 +95,35 @@ jobs:
             fi
           }
 
-          # Check core images
-          if check_image_exists "ar-sst-core-amd64" "$SST_VERSION"; then
+          # Extract package names from IMAGE_PREFIX
+          CORE_PACKAGE="${{ env.IMAGE_PREFIX }}-core"
+          FULL_PACKAGE="${{ env.IMAGE_PREFIX }}-full"
+
+          # Remove registry prefix to get just the package name
+          CORE_PACKAGE_NAME="${CORE_PACKAGE#*/}"
+          FULL_PACKAGE_NAME="${FULL_PACKAGE#*/}"
+
+          # Check core images (now using temporary architecture-specific tags)
+          if check_image_exists "$CORE_PACKAGE_NAME" "$SST_VERSION-amd64"; then
             echo "core_amd64_exists=true" >> $GITHUB_OUTPUT
           else
             echo "core_amd64_exists=false" >> $GITHUB_OUTPUT
           fi
 
-          if check_image_exists "ar-sst-core-arm64" "$SST_VERSION"; then
+          if check_image_exists "$CORE_PACKAGE_NAME" "$SST_VERSION-arm64"; then
             echo "core_arm64_exists=true" >> $GITHUB_OUTPUT
           else
             echo "core_arm64_exists=false" >> $GITHUB_OUTPUT
           fi
 
-          # Check full images
-          if check_image_exists "ar-sst-full-amd64" "$SST_VERSION"; then
+          # Check full images (now using temporary architecture-specific tags)
+          if check_image_exists "$FULL_PACKAGE_NAME" "$SST_VERSION-amd64"; then
             echo "full_amd64_exists=true" >> $GITHUB_OUTPUT
           else
             echo "full_amd64_exists=false" >> $GITHUB_OUTPUT
           fi
 
-          if check_image_exists "ar-sst-full-arm64" "$SST_VERSION"; then
+          if check_image_exists "$FULL_PACKAGE_NAME" "$SST_VERSION-arm64"; then
             echo "full_arm64_exists=true" >> $GITHUB_OUTPUT
           else
             echo "full_arm64_exists=false" >> $GITHUB_OUTPUT
@@ -228,10 +236,8 @@ jobs:
       - name: Prepare tags for SST-core
         id: core_tags
         run: |
-          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:${{ inputs.sst_version }}"
-          if [ "${{ inputs.tag_as_latest }}" = "true" ]; then
-            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:latest"
-          fi
+          # Use temporary architecture-specific tags that will be used only for manifest creation
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${{ inputs.sst_version }}-${{ steps.platform.outputs.arch }}"
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
       - name: Build and push SST-core container
@@ -297,10 +303,8 @@ jobs:
       - name: Prepare tags for SST-full
         id: full_tags
         run: |
-          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:${{ inputs.sst_version }}"
-          if [ "${{ inputs.tag_as_latest }}" = "true" ]; then
-            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:latest"
-          fi
+          # Use temporary architecture-specific tags that will be used only for manifest creation
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}-${{ steps.platform.outputs.arch }}"
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
       - name: Build and push SST-full container
@@ -366,7 +370,7 @@ jobs:
       - name: Validate container
         if: steps.check.outputs.build_result == 'success'
         run: |
-          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.type }}-${{ steps.arch.outputs.arch }}:${{ inputs.sst_version }}"
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.type }}:${{ inputs.sst_version }}-${{ steps.arch.outputs.arch }}"
 
           echo "Validating container: $IMAGE_NAME"
 
@@ -419,113 +423,149 @@ jobs:
 
           echo "Creating manifest lists for platforms: ${PLATFORMS}"
 
+          # Define package names from IMAGE_PREFIX
+          CORE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core"
+          FULL_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full"
+
           # Create core manifest if core was built
           if [ "${{ needs.build-core-containers.result }}" = "success" ]; then
-            echo "Creating ar-sst-core manifest lists..."
+            echo "Creating ${CORE_IMAGE} manifest lists..."
             CORE_MANIFESTS=""
 
-            # Check each architecture-specific image and collect available ones
+            # Collect architecture-specific temporary tags
             for platform in "${PLATFORM_ARRAY[@]}"; do
               ARCH="${platform#linux/}"
-              ARCH_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${ARCH}:${SST_VERSION}"
+              TEMP_TAG="${CORE_IMAGE}:${SST_VERSION}-${ARCH}"
 
-              echo "Checking: $ARCH_IMAGE"
-              if docker manifest inspect "$ARCH_IMAGE" >/dev/null 2>&1; then
-                # Check if this is a manifest list with multiple manifests
-                MANIFEST_COUNT=$(docker manifest inspect "$ARCH_IMAGE" --verbose | jq '. | length')
-                if [ "$MANIFEST_COUNT" -gt 1 ]; then
-                  echo "  [INFO] $ARCH_IMAGE is a manifest list with $MANIFEST_COUNT manifests"
-                  # Extract the actual image manifest (not the attestation)
-                  ACTUAL_IMAGE=$(docker manifest inspect "$ARCH_IMAGE" --verbose | jq -r '.[] | select(.Descriptor.platform.architecture != "unknown") | .Ref')
-                  if [ -n "$ACTUAL_IMAGE" ] && [ "$ACTUAL_IMAGE" != "null" ]; then
-                    CORE_MANIFESTS="$CORE_MANIFESTS $ACTUAL_IMAGE"
-                    echo "  [OK] Extracted actual image: $ACTUAL_IMAGE"
-                  else
-                    echo "  [SKIP] Could not extract actual image from manifest list"
-                  fi
-                else
-                  CORE_MANIFESTS="$CORE_MANIFESTS $ARCH_IMAGE"
-                  echo "  [OK] Added single-platform image: $ARCH_IMAGE"
-                fi
+              echo "Checking: $TEMP_TAG"
+              if docker manifest inspect "$TEMP_TAG" >/dev/null 2>&1; then
+                CORE_MANIFESTS="$CORE_MANIFESTS $TEMP_TAG"
+                echo "  [OK] Added temporary tag: $TEMP_TAG"
               else
-                echo "  [MISS] $ARCH_IMAGE not found"
+                echo "  [MISS] Temporary tag not found: $TEMP_TAG"
               fi
             done
 
-            # Only create manifest if we have source images
+            # Create multi-arch manifest from temporary tags
             if [ -n "$CORE_MANIFESTS" ]; then
-              echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION}"
+              echo "Creating multi-arch manifest: ${CORE_IMAGE}:${SST_VERSION}"
               docker buildx imagetools create \
-                --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${SST_VERSION} \
+                --tag ${CORE_IMAGE}:${SST_VERSION} \
                 $CORE_MANIFESTS
+
+              # Create latest manifest if requested
+              if [ "$TAG_LATEST" = "true" ]; then
+                echo "Creating latest manifest: ${CORE_IMAGE}:latest"
+                docker buildx imagetools create \
+                  --tag ${CORE_IMAGE}:latest \
+                  $CORE_MANIFESTS
+              fi
+
+              echo "[SUCCESS] ${CORE_IMAGE} manifest lists created successfully"
             else
-              echo "[ERROR] No valid source images found for core manifest"
+              echo "[ERROR] No temporary core images found for manifest creation"
             fi
-
-            # Create latest manifest if requested
-            if [ "$TAG_LATEST" = "true" ] && [ -n "$CORE_MANIFESTS" ]; then
-              echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest"
-              docker buildx imagetools create \
-                --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest \
-                $CORE_MANIFESTS
-            fi
-
-            echo "[SUCCESS] ar-sst-core manifest lists created successfully"
           fi
 
           # Create full manifest if full was built
           if [ "${{ needs.build-full-containers.result }}" = "success" ]; then
-            echo "Creating ar-sst-full manifest lists..."
+            echo "Creating ${FULL_IMAGE} manifest lists..."
             FULL_MANIFESTS=""
 
-            # Check each architecture-specific image and collect available ones
+            # Collect architecture-specific temporary tags
             for platform in "${PLATFORM_ARRAY[@]}"; do
               ARCH="${platform#linux/}"
-              ARCH_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${ARCH}:${SST_VERSION}"
+              TEMP_TAG="${FULL_IMAGE}:${SST_VERSION}-${ARCH}"
 
-              echo "Checking: $ARCH_IMAGE"
-              if docker manifest inspect "$ARCH_IMAGE" >/dev/null 2>&1; then
-                # Check if this is a manifest list with multiple manifests
-                MANIFEST_COUNT=$(docker manifest inspect "$ARCH_IMAGE" --verbose | jq '. | length')
-                if [ "$MANIFEST_COUNT" -gt 1 ]; then
-                  echo "  [INFO] $ARCH_IMAGE is a manifest list with $MANIFEST_COUNT manifests"
-                  # Extract the actual image manifest (not the attestation)
-                  ACTUAL_IMAGE=$(docker manifest inspect "$ARCH_IMAGE" --verbose | jq -r '.[] | select(.Descriptor.platform.architecture != "unknown") | .Ref')
-                  if [ -n "$ACTUAL_IMAGE" ] && [ "$ACTUAL_IMAGE" != "null" ]; then
-                    FULL_MANIFESTS="$FULL_MANIFESTS $ACTUAL_IMAGE"
-                    echo "  [OK] Extracted actual image: $ACTUAL_IMAGE"
-                  else
-                    echo "  [SKIP] Could not extract actual image from manifest list"
-                  fi
-                else
-                  FULL_MANIFESTS="$FULL_MANIFESTS $ARCH_IMAGE"
-                  echo "  [OK] Added single-platform image: $ARCH_IMAGE"
-                fi
+              echo "Checking: $TEMP_TAG"
+              if docker manifest inspect "$TEMP_TAG" >/dev/null 2>&1; then
+                FULL_MANIFESTS="$FULL_MANIFESTS $TEMP_TAG"
+                echo "  [OK] Added temporary tag: $TEMP_TAG"
               else
-                echo "  [MISS] $ARCH_IMAGE not found"
+                echo "  [MISS] Temporary tag not found: $TEMP_TAG"
               fi
             done
 
-            # Only create manifest if we have source images
+            # Create multi-arch manifest from temporary tags
             if [ -n "$FULL_MANIFESTS" ]; then
-              echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION}"
+              echo "Creating multi-arch manifest: ${FULL_IMAGE}:${SST_VERSION}"
               docker buildx imagetools create \
-                --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${SST_VERSION} \
+                --tag ${FULL_IMAGE}:${SST_VERSION} \
                 $FULL_MANIFESTS
+
+              # Create latest manifest if requested
+              if [ "$TAG_LATEST" = "true" ]; then
+                echo "Creating latest manifest: ${FULL_IMAGE}:latest"
+                docker buildx imagetools create \
+                  --tag ${FULL_IMAGE}:latest \
+                  $FULL_MANIFESTS
+              fi
+
+              echo "[SUCCESS] ${FULL_IMAGE} manifest lists created successfully"
             else
-              echo "[ERROR] No valid source images found for full manifest"
+              echo "[ERROR] No temporary full images found for manifest creation"
             fi
-
-            # Create latest manifest if requested
-            if [ "$TAG_LATEST" = "true" ] && [ -n "$FULL_MANIFESTS" ]; then
-              echo "Creating manifest: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest"
-              docker buildx imagetools create \
-                --tag ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest \
-                $FULL_MANIFESTS
-            fi
-
-            echo "[SUCCESS] ar-sst-full manifest lists created successfully"
           fi
+
+      - name: Cleanup temporary architecture-specific tags
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SST_VERSION="${{ inputs.sst_version }}"
+          PLATFORMS="${{ inputs.build_platforms }}"
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+
+          # Define package names from IMAGE_PREFIX (extract just the package name, not the full registry path)
+          CORE_PACKAGE_NAME="${{ env.IMAGE_PREFIX }}-core"
+          FULL_PACKAGE_NAME="${{ env.IMAGE_PREFIX }}-full"
+
+          echo "Cleaning up temporary architecture-specific tags..."
+
+          # Clean up core temporary tags
+          if [ "${{ needs.build-core-containers.result }}" = "success" ]; then
+            for platform in "${PLATFORM_ARRAY[@]}"; do
+              ARCH="${platform#linux/}"
+              TEMP_TAG="${SST_VERSION}-${ARCH}"
+
+              echo "Attempting to delete temporary tag: ${CORE_PACKAGE_NAME}:$TEMP_TAG"
+
+              # Get version ID for the temporary tag
+              VERSION_ID=$(gh api "/user/packages/container/${CORE_PACKAGE_NAME}/versions" --paginate | \
+                jq -r --arg tag "$TEMP_TAG" '.[] | select(.metadata.container.tags[]? == $tag) | .id' | head -1)
+
+              if [ -n "$VERSION_ID" ] && [ "$VERSION_ID" != "null" ]; then
+                echo "  Deleting version ID: $VERSION_ID"
+                gh api --method DELETE "/user/packages/container/${CORE_PACKAGE_NAME}/versions/$VERSION_ID" || true
+              else
+                echo "  No version found for tag: $TEMP_TAG"
+              fi
+            done
+          fi
+
+          # Clean up full temporary tags
+          if [ "${{ needs.build-full-containers.result }}" = "success" ]; then
+            for platform in "${PLATFORM_ARRAY[@]}"; do
+              ARCH="${platform#linux/}"
+              TEMP_TAG="${SST_VERSION}-${ARCH}"
+
+              echo "Attempting to delete temporary tag: ${FULL_PACKAGE_NAME}:$TEMP_TAG"
+
+              # Get version ID for the temporary tag
+              VERSION_ID=$(gh api "/user/packages/container/${FULL_PACKAGE_NAME}/versions" --paginate | \
+                jq -r --arg tag "$TEMP_TAG" '.[] | select(.metadata.container.tags[]? == $tag) | .id' | head -1)
+
+              if [ -n "$VERSION_ID" ] && [ "$VERSION_ID" != "null" ]; then
+                echo "  Deleting version ID: $VERSION_ID"
+                gh api --method DELETE "/user/packages/container/${FULL_PACKAGE_NAME}/versions/$VERSION_ID" || true
+              else
+                echo "  No version found for tag: $TEMP_TAG"
+              fi
+            done
+          fi
+
+          echo "Temporary tag cleanup completed"
 
   summary:
     runs-on: ubuntu-latest
@@ -556,8 +596,7 @@ jobs:
                 echo "- **Latest**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest\`" >> $GITHUB_STEP_SUMMARY
               fi
             fi
-            echo "- **AMD64**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-amd64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **ARM64**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-arm64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Architecture-specific builds**: Completed for all requested platforms" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ needs.check-existing-images.outputs.should_build_core }}" == "true" ]; then
             echo "[FAILED] **SST-Core Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
           else
@@ -575,8 +614,7 @@ jobs:
                 echo "- **Latest**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest\`" >> $GITHUB_STEP_SUMMARY
               fi
             fi
-            echo "- **AMD64**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **ARM64**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-arm64:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Architecture-specific builds**: Completed for all requested platforms" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ needs.check-existing-images.outputs.should_build_full }}" == "true" ]; then
             echo "[FAILED] **SST-Full Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
           else
@@ -596,7 +634,5 @@ jobs:
           echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
           echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# SST with Elements (full simulation capabilities)" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-amd64:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "# All images automatically select the correct architecture for your platform" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
