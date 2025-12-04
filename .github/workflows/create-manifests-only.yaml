@@ -50,7 +50,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  RELEASE_IMAGE_PREFIX: ${{ github.repository_owner }}/ar-sst
+  RELEASE_IMAGE_PREFIX: ${{ github.repository_owner }}/sst
   DEV_IMAGE_PREFIX: ${{ github.repository_owner }}/sst-dev
 
 jobs:
@@ -231,18 +231,18 @@ jobs:
           for container_type in "${TYPE_ARRAY[@]}"; do
             case "$container_type" in
               "core")
-                echo "=== AR-SST-CORE:$SST_VERSION ==="
+                echo "=== ${{ env.RELEASE_IMAGE_PREFIX }}-core:$SST_VERSION ==="
                 docker manifest inspect ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-core:$SST_VERSION --verbose | grep -E "(mediaType|platform)"
                 if [ "$TAG_LATEST" = "true" ]; then
-                  echo "=== AR-SST-CORE:LATEST ==="
+                  echo "=== ${{ env.RELEASE_IMAGE_PREFIX }}-core:latest ==="
                   docker manifest inspect ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-core:latest --verbose | grep -E "(mediaType|platform)"
                 fi
                 ;;
               "full")
-                echo "=== AR-SST-FULL:$SST_VERSION ==="
+                echo "=== ${{ env.RELEASE_IMAGE_PREFIX }}-full:$SST_VERSION ==="
                 docker manifest inspect ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-full:$SST_VERSION --verbose | grep -E "(mediaType|platform)"
                 if [ "$TAG_LATEST" = "true" ]; then
-                  echo "=== AR-SST-FULL:LATEST ==="
+                  echo "=== ${{ env.RELEASE_IMAGE_PREFIX }}-full:latest ==="
                   docker manifest inspect ${{ env.REGISTRY }}/${{ env.RELEASE_IMAGE_PREFIX }}-full:latest --verbose | grep -E "(mediaType|platform)"
                 fi
                 ;;

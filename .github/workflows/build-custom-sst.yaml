@@ -41,7 +41,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}/ar-sst
+  IMAGE_PREFIX: ${{ github.repository_owner }}/sst
   BUILD_NCPUS: 4
 
 jobs:

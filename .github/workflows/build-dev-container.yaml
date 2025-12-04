@@ -379,12 +379,12 @@ jobs:
           echo "Use this container for SST development:" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "# Pull the development container" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-amd64:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Run interactively with your SST source mounted" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it -v \$(pwd):/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-amd64:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker run -it -v \$(pwd):/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "# Use as VS Code devcontainer base image" >> $GITHUB_STEP_SUMMARY
           echo "# Add to .devcontainer/devcontainer.json:" >> $GITHUB_STEP_SUMMARY
-          echo '# "image": "${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-amd64:${{ inputs.tag_suffix }}"' >> $GITHUB_STEP_SUMMARY
+          echo '# "image": "${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}:${{ inputs.tag_suffix }}"' >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

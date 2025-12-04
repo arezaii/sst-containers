@@ -7,18 +7,10 @@ on:
         description: 'Name of the experiment directory (must exist in repository)'
         required: true
         type: string
-      base_image_type:
-        description: 'Base SST image type (only used if experiment has no custom Containerfile)'
+      base_image:
+        description: 'Base image (only used if experiment has no custom Containerfile). Examples: sst-core:latest, sst-full:15.1.0, myuser/custom-sst:v2.0'
         required: false
-        type: choice
-        options:
-          - 'ar-sst-core'
-          - 'ar-sst-full'
-        default: 'ar-sst-core'
-      base_image_tag:
-        description: 'Base SST image tag (only used if experiment has no custom Containerfile)'
-        required: false
-        default: 'latest'
+        default: 'sst-core:latest'
         type: string
       build_platform:
         description: 'Platform to build for'
@@ -117,12 +109,20 @@ jobs:
         id: prepare
         run: |
           EXPERIMENT="${{ inputs.experiment_name }}"
-          BASE_TYPE="${{ inputs.base_image_type }}"
-          BASE_TAG="${{ inputs.base_image_tag }}"
+          BASE_IMAGE_INPUT="${{ inputs.base_image }}"
           BASE_ARCH="${{ steps.platform.outputs.arch }}"
 
-          # Construct base image name
-          BASE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${BASE_TYPE}-${BASE_ARCH}:${BASE_TAG}"
+          # Parse the base image input to extract name and tag
+          if [[ "$BASE_IMAGE_INPUT" == *":"* ]]; then
+            BASE_IMAGE_NAME="${BASE_IMAGE_INPUT%:*}"
+            BASE_TAG="${BASE_IMAGE_INPUT##*:}"
+          else
+            BASE_IMAGE_NAME="$BASE_IMAGE_INPUT"
+            BASE_TAG="latest"
+          fi
+
+          # Construct base image name with architecture suffix
+          BASE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${BASE_IMAGE_NAME}-${BASE_ARCH}:${BASE_TAG}"
           echo "base_image=$BASE_IMAGE" >> $GITHUB_OUTPUT
           echo "::notice::Base image: $BASE_IMAGE"
 
@@ -212,8 +212,7 @@ jobs:
           echo "**Experiment Name:** ${{ inputs.experiment_name }}" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.validate-experiment.outputs.has_containerfile }}" = "false" ]; then
-            echo "**Base Image Type:** ${{ inputs.base_image_type }}" >> $GITHUB_STEP_SUMMARY
-            echo "**Base Image Tag:** ${{ inputs.base_image_tag }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Base Image:** ${{ inputs.base_image }}" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "**Build Platform:** ${{ inputs.build_platform }}" >> $GITHUB_STEP_SUMMARY
@@ -266,10 +265,18 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "This experiment container is built on top of:" >> $GITHUB_STEP_SUMMARY
 
-            # Extract architecture from platform
+            # Extract architecture from platform and construct base image reference
             PLATFORM="${{ inputs.build_platform }}"
             ARCH="${PLATFORM#linux/}"
-            echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.base_image_type }}-${ARCH}:${{ inputs.base_image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+            BASE_IMAGE_INPUT="${{ inputs.base_image }}"
+            if [[ "$BASE_IMAGE_INPUT" == *":"* ]]; then
+              BASE_IMAGE_NAME="${BASE_IMAGE_INPUT%:*}"
+              BASE_TAG="${BASE_IMAGE_INPUT##*:}"
+            else
+              BASE_IMAGE_NAME="$BASE_IMAGE_INPUT"
+              BASE_TAG="latest"
+            fi
+            echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${BASE_IMAGE_NAME}-${ARCH}:${BASE_TAG}\`" >> $GITHUB_STEP_SUMMARY
           else
             echo "## Custom Containerfile" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

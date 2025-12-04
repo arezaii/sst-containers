@@ -1,4 +1,4 @@
-# sst-containers
+# sst-container-factory
 
 Build containerized SST (Structural Simulation Toolkit) environments.
 
@@ -14,12 +14,12 @@ Build containerized SST (Structural Simulation Toolkit) environments.
 ### Use Pre-built Containers
 ```bash
 # Automatically pulls the right architecture for your platform
-docker pull ghcr.io/arezaii/ar-sst-core:15.1.0
-docker run -it ghcr.io/arezaii/ar-sst-core:15.1.0
+docker pull ghcr.io/ai-hpc-adv-dev/sst-core:15.1.0
+docker run -it ghcr.io/ai-hpc-adv-dev/sst-core:15.1.0
 
 # Or pull the development environment
-docker pull ghcr.io/arezaii/sst-dev:latest
-docker run -it ghcr.io/arezaii/sst-dev:latest
+docker pull ghcr.io/ai-hpc-adv-dev/sst-dev:latest
+docker run -it ghcr.io/ai-hpc-adv-dev/sst-dev:latest
 ```
 
 ### Build Containers via GitHub Actions
@@ -36,15 +36,10 @@ Go to Actions tab and select:
 
 ## Container Types
 
-- **Release**: `ghcr.io/arezaii/ar-sst-core:15.1.0` (official SST versions, multi-arch)
-- **Development**: `ghcr.io/arezaii/sst-dev:latest` (build environment with dependencies, multi-arch)
-- **Custom**: `ghcr.io/arezaii/ar-sst-core:custom-a1b2c3d` (custom SST from git sources, multi-arch)
-- **Experiment**: `ghcr.io/arezaii/my-experiment:latest` (your scripts, architecture-specific)
-
-### Architecture-Specific Tags (Advanced)
-If you need a specific architecture, you can still pull:
-- **AMD64**: `ghcr.io/arezaii/ar-sst-core-amd64:15.1.0`
-- **ARM64**: `ghcr.io/arezaii/ar-sst-core-arm64:15.1.0`
+- **Release**: `ghcr.io/ai-hpc-adv-dev/sst-core:15.1.0` (official SST versions, multi-arch)
+- **Development**: `ghcr.io/ai-hpc-adv-dev/sst-dev:latest` (build environment with dependencies, multi-arch)
+- **Custom**: `ghcr.io/ai-hpc-adv-dev/sst-core:custom-a1b2c3d` (custom SST from git sources, multi-arch)
+- **Experiment**: `ghcr.io/ai-hpc-adv-dev/my-experiment:latest` (your scripts, architecture-specific)
 
 ## Automated Building & Packaging
 
@@ -58,28 +53,28 @@ The GitHub Actions workflows provide consistent, automated container builds:
 
 All containers include metadata for traceability and can be inspected with `docker inspect`.
 
-example labels:
-```
-            "Labels": {
-                "com.github.ref_name": "main",
-                "com.github.repository": "arezaii/sst-containers",
-                "com.github.run_id": "19543004220",
-                "com.github.run_number": "12",
-                "com.github.sha": "2e1578540f5662b277f0cd3177d08afdbc2be9d8",
-                "com.github.workflow": "Build Experiment Container",
-                "org.opencontainers.image.ref.name": "ubuntu",
-                "org.opencontainers.image.version": "22.04"
-            },
-```
+## Development Environment Setup
+
+### Using SST Containers with VS Code DevContainers
+
+The SST development containers are designed to work with VS Code's Dev Containers extension.
+See [DEVCONTAINER_SETUP.md](DEVCONTAINER_SETUP.md) for comprehensive instructions on creating your own devcontainer configuration.
+
+Key benefits:
+- **Git identity preservation** - Your commits maintain proper authorship
+- **SSH key access** - Full GitHub/GitLab authentication inside the container
+- **Source code mounting** - Edit code on your host, build in the container
+- **GitHub Copilot compatibility** - AI assistance works inside containers
 
 ## Creating Experiments
 
-Add directory to this repo with your experiment files:
+Add a directory to this repo with your experiment files:
 ```
 my-experiment/
-├── run_simulation.sh
-├── README.md
-└── Containerfile (optional - for custom dependencies)
+|-- run_simulation.sh
+|-- README.md
+`-- Containerfile (optional - for custom dependencies)
 ```
 
-The workflow will automatically detect and package your experiment. See existing examples: `hello-world-mpi/`, `phold-example/`, `tcl-test-experiment/`.
+The workflow will automatically detect and package your experiment.
+See existing examples: `hello-world-mpi/`, `phold-example/`, `tcl-test-experiment/`.
