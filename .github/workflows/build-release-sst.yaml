@@ -7,6 +7,15 @@ on:
         description: 'SST version to build (e.g., 15.1.0, 15.0.0)'
         required: true
         type: string
+      container_types:
+        description: 'Container types to build'
+        required: false
+        default: 'core,full'
+        type: choice
+        options:
+          - 'core,full'
+          - 'core'
+          - 'full'
       mpich_version:
         description: 'MPICH version to use'
         required: false
@@ -36,15 +45,6 @@ on:
         required: false
         default: false
         type: boolean
-      container_types:
-        description: 'Container types to build'
-        required: false
-        default: 'core,full'
-        type: choice
-        options:
-          - 'core,full'
-          - 'core'
-          - 'full'
 
 env:
   REGISTRY: ghcr.io
