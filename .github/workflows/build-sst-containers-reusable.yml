@@ -141,6 +141,38 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Cache MPICH tarball
+        id: cache-mpich
+        uses: actions/cache@v3
+        with:
+          path: Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
+          key: mpich-${{ inputs.mpich_version }}
+
+      - name: Download MPICH source
+        if: steps.cache-mpich.outputs.cache-hit != 'true'
+        working-directory: Containerfiles
+        run: |
+          echo "Downloading MPICH ${{ inputs.mpich_version }}..."
+          wget https://www.mpich.org/static/downloads/${{ inputs.mpich_version }}/mpich-${{ inputs.mpich_version }}.tar.gz --no-check-certificate
+
+      - name: Cache SST sources (for core/full builds)
+        id: cache-sst
+        if: inputs.container_type == 'core' || inputs.container_type == 'full'
+        uses: actions/cache@v3
+        with:
+          path: |
+            Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
+            Containerfiles/sstelements-${{ inputs.sst_version }}.tar.gz
+          key: sst-sources-${{ inputs.sst_version }}
+
+      - name: Download SST sources (for core/full builds)
+        if: (inputs.container_type == 'core' || inputs.container_type == 'full') && steps.cache-sst.outputs.cache-hit != 'true'
+        working-directory: Containerfiles
+        run: |
+          echo "Downloading SST ${{ inputs.sst_version }} sources..."
+          wget https://github.com/sstsimulator/sst-core/releases/download/v${{ inputs.sst_version }}_Final/sstcore-${{ inputs.sst_version }}.tar.gz --no-check-certificate
+          wget https://github.com/sstsimulator/sst-elements/releases/download/v${{ inputs.sst_version }}_Final/sstelements-${{ inputs.sst_version }}.tar.gz --no-check-certificate
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -193,6 +225,11 @@ jobs:
           build-args: |
             ${{ inputs.sst_version && format('SSTver={0}', inputs.sst_version) || '' }}
             ${{ inputs.mpich_version && format('mpich={0}', inputs.mpich_version) || '' }}
+            ${{ inputs.sst_core_repo && format('SSTrepo={0}', inputs.sst_core_repo) || '' }}
+            ${{ inputs.sst_core_ref && format('tag={0}', inputs.sst_core_ref) || '' }}
+            ${{ inputs.sst_elements_repo && format('SSTElementsRepo={0}', inputs.sst_elements_repo) || '' }}
+            ${{ inputs.sst_elements_ref && format('elementsTag={0}', inputs.sst_elements_ref) || '' }}
+            ${{ inputs.base_image && format('BASE_IMAGE={0}', inputs.base_image) || '' }}
             NCPUS=${{ env.BUILD_NCPUS }}
           labels: |
             com.github.sha=${{ github.sha }}
@@ -210,6 +247,17 @@ jobs:
       - name: Output built image
         run: |
           echo "Built image: ${{ steps.tags.outputs.temp_tag }}"
+
+      - name: Upload build dependencies
+        uses: actions/upload-artifact@v4
+        if: steps.cache-mpich.outputs.cache-hit != 'true' || (steps.cache-sst.outputs.cache-hit != 'true' && (inputs.container_type == 'core' || inputs.container_type == 'full'))
+        with:
+          name: sst-sources-${{ inputs.sst_version || 'dev' }}-${{ inputs.mpich_version }}
+          path: |
+            Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
+            Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
+            Containerfiles/sstelements-${{ inputs.sst_version }}.tar.gz
+          retention-days: 7
 
   collect-images:
     runs-on: ubuntu-latest
