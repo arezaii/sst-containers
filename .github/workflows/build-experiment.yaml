@@ -12,12 +12,13 @@ on:
         required: false
         default: 'sst-core:latest'
         type: string
-      build_platform:
-        description: 'Platform to build for'
+      build_platforms:
+        description: 'Platforms to build for'
         required: false
-        default: 'linux/amd64'
+        default: 'linux/amd64,linux/arm64'
         type: choice
         options:
+          - 'linux/amd64,linux/arm64'
           - 'linux/amd64'
           - 'linux/arm64'
       tag_suffix:
@@ -28,7 +29,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}
 
 jobs:
   validate-experiment:
@@ -47,238 +47,79 @@ jobs:
         id: check
         run: |
           EXPERIMENT="${{ inputs.experiment_name }}"
+          echo "Checking experiment directory: $EXPERIMENT"
 
-          # Check if experiment directory exists
           if [ ! -d "$EXPERIMENT" ]; then
-            echo "::error::Experiment directory '$EXPERIMENT' does not exist"
+            echo "ERROR: Experiment directory '$EXPERIMENT' does not exist"
             echo "experiment_exists=false" >> $GITHUB_OUTPUT
-            exit 1
+            exit 0
           fi
 
           echo "experiment_exists=true" >> $GITHUB_OUTPUT
-          echo "::notice::Found experiment directory: $EXPERIMENT"
 
-          # Check if directory has a Containerfile
+          # Check if experiment has its own Containerfile
           if [ -f "$EXPERIMENT/Containerfile" ]; then
+            echo "Found custom Containerfile in $EXPERIMENT/"
             echo "has_containerfile=true" >> $GITHUB_OUTPUT
-            echo "::notice::Found custom Containerfile in experiment directory"
           else
+            echo "No custom Containerfile found, will use base image: ${{ inputs.base_image }}"
             echo "has_containerfile=false" >> $GITHUB_OUTPUT
-            echo "::notice::No custom Containerfile found, will use default"
           fi
 
           # Count files in experiment directory
-          FILE_COUNT=$(find "$EXPERIMENT" -type f | wc -l | tr -d ' ')
-          echo "files_count=$FILE_COUNT" >> $GITHUB_OUTPUT
-          echo "::notice::Experiment directory contains $FILE_COUNT file(s)"
+          FILES_COUNT=$(find "$EXPERIMENT" -type f | wc -l)
+          echo "files_count=$FILES_COUNT" >> $GITHUB_OUTPUT
+          echo "Found $FILES_COUNT files in experiment directory"
 
-          # List files for reference
-          echo "Files in experiment directory:"
-          find "$EXPERIMENT" -type f -exec ls -lh {} \;
-
-  build-experiment-container:
-    runs-on: ${{ inputs.build_platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: validate-experiment
+  build-experiment-containers:
+    needs: [validate-experiment]
     if: needs.validate-experiment.outputs.experiment_exists == 'true'
+    uses: ./.github/workflows/build-sst-containers-reusable.yml
     permissions:
       contents: read
       packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    with:
+      container_type: 'experiment'
+      image_prefix: '${{ github.repository_owner }}'
+      tag_suffix: '${{ inputs.tag_suffix }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      experiment_name: '${{ inputs.experiment_name }}'
+      base_image: '${{ inputs.base_image }}'
+      containerfile_path: '${{ inputs.experiment_name }}/Containerfile'
+      docker_context: '${{ inputs.experiment_name }}'
+    secrets: inherit
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract platform info
-        id: platform
-        run: |
-          PLATFORM="${{ inputs.build_platform }}"
-          ARCH="${PLATFORM##*/}"
-          echo "arch=$ARCH" >> $GITHUB_OUTPUT
-          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
-
-      - name: Prepare build context
-        id: prepare
-        run: |
-          EXPERIMENT="${{ inputs.experiment_name }}"
-          BASE_IMAGE_INPUT="${{ inputs.base_image }}"
-          BASE_ARCH="${{ steps.platform.outputs.arch }}"
-
-          # Parse the base image input to extract name and tag
-          if [[ "$BASE_IMAGE_INPUT" == *":"* ]]; then
-            BASE_IMAGE_NAME="${BASE_IMAGE_INPUT%:*}"
-            BASE_TAG="${BASE_IMAGE_INPUT##*:}"
-          else
-            BASE_IMAGE_NAME="$BASE_IMAGE_INPUT"
-            BASE_TAG="latest"
-          fi
-
-          # Construct base image name with architecture suffix
-          BASE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${BASE_IMAGE_NAME}-${BASE_ARCH}:${BASE_TAG}"
-          echo "base_image=$BASE_IMAGE" >> $GITHUB_OUTPUT
-          echo "::notice::Base image: $BASE_IMAGE"
-
-          # Determine which Containerfile to use
-          if [ "${{ needs.validate-experiment.outputs.has_containerfile }}" = "true" ]; then
-            CONTAINERFILE="$EXPERIMENT/Containerfile"
-            echo "containerfile=$CONTAINERFILE" >> $GITHUB_OUTPUT
-            echo "::notice::Using custom Containerfile: $CONTAINERFILE"
-          else
-            # Create a default Containerfile
-            mkdir -p .build-temp
-            cat > .build-temp/Containerfile << 'EOF'
-          ARG BASE_IMAGE=ubuntu:22.04
-          FROM ${BASE_IMAGE}
-
-          ARG EXPERIMENT_NAME
-
-          # Create experiment directory
-          WORKDIR /experiments/${EXPERIMENT_NAME}
-
-          # Copy all experiment files
-          COPY . .
-
-          # Make all .sh files executable
-          RUN find . -name "*.sh" -type f -exec chmod +x {} \;
-
-          # Return to workspace
-          WORKDIR /workspace
-
-          # Add experiment directory to PATH
-          ENV PATH="/experiments/${EXPERIMENT_NAME}:${PATH}"
-          EOF
-            echo "containerfile=.build-temp/Containerfile" >> $GITHUB_OUTPUT
-            echo "::notice::Using default Containerfile template"
-          fi
-
-      - name: Build and push experiment container (custom Containerfile)
-        if: needs.validate-experiment.outputs.has_containerfile == 'true'
-        uses: docker/build-push-action@v5
-        with:
-          context: ${{ inputs.experiment_name }}
-          file: ${{ inputs.experiment_name }}/Containerfile
-          labels: |
-            com.github.sha=${{ github.sha }}
-            com.github.workflow=${{ github.workflow }}
-            com.github.run_id=${{ github.run_id }}
-            com.github.run_number=${{ github.run_number }}
-            com.github.repository=${{ github.repository }}
-            com.github.ref_name=${{ github.ref_name }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}:${{ inputs.tag_suffix }}
-          push: true
-          cache-from: type=gha,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
-          cache-to: type=gha,mode=max,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
-
-      - name: Build and push experiment container (default template)
-        if: needs.validate-experiment.outputs.has_containerfile == 'false'
-        uses: docker/build-push-action@v5
-        with:
-          context: ${{ inputs.experiment_name }}
-          file: ${{ steps.prepare.outputs.containerfile }}
-          build-args: |
-            BASE_IMAGE=${{ steps.prepare.outputs.base_image }}
-            EXPERIMENT_NAME=${{ inputs.experiment_name }}
-          labels: |
-            com.github.sha=${{ github.sha }}
-            com.github.workflow=${{ github.workflow }}
-            com.github.run_id=${{ github.run_id }}
-            com.github.run_number=${{ github.run_number }}
-            com.github.repository=${{ github.repository }}
-            com.github.ref_name=${{ github.ref_name }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}:${{ inputs.tag_suffix }}
-          push: true
-          cache-from: type=gha,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
-          cache-to: type=gha,mode=max,scope=experiment-${{ inputs.experiment_name }}-${{ steps.platform.outputs.arch }}
-
-  summary:
-    runs-on: ubuntu-latest
-    needs: [validate-experiment, build-experiment-container]
-    if: always()
+  validate-experiment-containers:
     permissions:
       contents: read
-    steps:
-      - name: Build Summary
-        run: |
-          echo "# Experiment Container Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Experiment Name:** ${{ inputs.experiment_name }}" >> $GITHUB_STEP_SUMMARY
+      packages: read
+    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    needs: [build-experiment-containers]
+    if: needs.build-experiment-containers.result == 'success'
+    with:
+      container_type: 'experiment'
+      image_tags: '${{ needs.build-experiment-containers.outputs.built_images }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      max_image_size_mb: 8192  # 8GB for experiments
+    secrets: inherit
 
-          if [ "${{ needs.validate-experiment.outputs.has_containerfile }}" = "false" ]; then
-            echo "**Base Image:** ${{ inputs.base_image }}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "**Build Platform:** ${{ inputs.build_platform }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Container Tag:** ${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "**Experiment Files:** ${{ needs.validate-experiment.outputs.files_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Custom Containerfile:** ${{ needs.validate-experiment.outputs.has_containerfile }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.build-experiment-container.result }}" == "success" ]; then
-            echo "**Build Status:** Success" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Built Container" >> $GITHUB_STEP_SUMMARY
-
-            # Extract architecture from platform
-            PLATFORM="${{ inputs.build_platform }}"
-            ARCH="${PLATFORM#linux/}"
-            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${ARCH}:${{ inputs.tag_suffix }}\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**Build Status:** Failed" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Usage" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Pull and run the experiment container:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# Pull the container for your architecture" >> $GITHUB_STEP_SUMMARY
-
-          # Extract architecture from platform for usage example
-          PLATFORM="${{ inputs.build_platform }}"
-          ARCH="${PLATFORM#linux/}"
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${ARCH}:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# Run the container" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ inputs.experiment_name }}-${ARCH}:${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# Experiment files are located in /experiments/${{ inputs.experiment_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "# Scripts in the experiment directory are automatically in PATH" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.validate-experiment.outputs.has_containerfile }}" = "false" ]; then
-            echo "## Base Image" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "This experiment container is built on top of:" >> $GITHUB_STEP_SUMMARY
-
-            # Extract architecture from platform and construct base image reference
-            PLATFORM="${{ inputs.build_platform }}"
-            ARCH="${PLATFORM#linux/}"
-            BASE_IMAGE_INPUT="${{ inputs.base_image }}"
-            if [[ "$BASE_IMAGE_INPUT" == *":"* ]]; then
-              BASE_IMAGE_NAME="${BASE_IMAGE_INPUT%:*}"
-              BASE_TAG="${BASE_IMAGE_INPUT##*:}"
-            else
-              BASE_IMAGE_NAME="$BASE_IMAGE_INPUT"
-              BASE_TAG="latest"
-            fi
-            echo "\`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${BASE_IMAGE_NAME}-${ARCH}:${BASE_TAG}\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "## Custom Containerfile" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "This experiment uses a custom Containerfile that defines its own base image and build process." >> $GITHUB_STEP_SUMMARY
-          fi
+  generate-summary:
+    uses: ./.github/workflows/generate-build-summary-reusable.yml
+    needs: [validate-experiment, build-experiment-containers, validate-experiment-containers]
+    if: always()
+    with:
+      workflow_type: 'experiment'
+      container_type: 'experiment'
+      build_successful: ${{ needs.build-experiment-containers.result == 'success' }}
+      manifest_successful: ${{ needs.build-experiment-containers.result == 'success' }}
+      validation_successful: ${{ needs.validate-experiment-containers.result == 'success' }}
+      manifest_tag: '${{ needs.build-experiment-containers.outputs.manifest_tag }}'
+      built_images: '${{ needs.build-experiment-containers.outputs.built_images }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      tag_suffix: '${{ inputs.tag_suffix }}'
+      experiment_name: '${{ inputs.experiment_name }}'
+      base_image: '${{ inputs.base_image }}'
+      # Additional context from validation
+      experiment_exists: '${{ needs.validate-experiment.outputs.experiment_exists }}'
+      has_containerfile: '${{ needs.validate-experiment.outputs.has_containerfile }}'
+      files_count: '${{ needs.validate-experiment.outputs.files_count }}'
