@@ -1,0 +1,208 @@
+name: Generate Build Summary (for use by other workflows)
+
+on:
+  workflow_call:
+    inputs:
+      workflow_type:
+        description: 'Type of workflow generating summary'
+        required: true
+        type: string  # 'nightly', 'release', 'dev', 'custom', 'experiment'
+
+      container_type:
+        description: 'Type of container built'
+        required: true
+        type: string
+
+      build_successful:
+        description: 'Whether builds were successful'
+        required: true
+        type: boolean
+
+      manifest_successful:
+        description: 'Whether manifest creation was successful'
+        required: true
+        type: boolean
+
+      validation_successful:
+        description: 'Whether validation was successful'
+        required: true
+        type: boolean
+
+      manifest_tag:
+        description: 'Main fat manifest tag'
+        required: true
+        type: string
+
+      built_images:
+        description: 'JSON array of architecture-specific images'
+        required: true
+        type: string
+
+      build_platforms:
+        description: 'Platforms that were built'
+        required: true
+        type: string
+
+      # Workflow-specific metadata
+      sst_version:
+        description: 'SST version (for release builds)'
+        required: false
+        type: string
+
+      sst_commit:
+        description: 'SST commit SHA (for nightly builds)'
+        required: false
+        type: string
+
+      experiment_name:
+        description: 'Experiment name (for experiment builds)'
+        required: false
+        type: string
+
+      tag_suffix:
+        description: 'Tag suffix used'
+        required: false
+        type: string
+
+      mpich_version:
+        description: 'MPICH version used'
+        required: false
+        type: string
+
+jobs:
+  generate-summary:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Generate Build Summary
+        run: |
+          # Generate workflow-specific title
+          case "${{ inputs.workflow_type }}" in
+            "nightly")
+              echo "# Nightly SST Container Build Summary" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "release")
+              echo "# SST Release Container Build Summary" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "dev")
+              echo "# SST Development Container Build Summary" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "custom")
+              echo "# Custom SST Container Build Summary" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "experiment")
+              echo "# Experiment Container Build Summary" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Workflow-specific metadata
+          case "${{ inputs.workflow_type }}" in
+            "nightly")
+              if [ -n "${{ inputs.sst_commit }}" ]; then
+                echo "**SST-Core Commit:** ${{ inputs.sst_commit }}" >> $GITHUB_STEP_SUMMARY
+              fi
+              ;;
+            "release")
+              if [ -n "${{ inputs.sst_version }}" ]; then
+                echo "**SST Version:** ${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
+              fi
+              ;;
+            "experiment")
+              if [ -n "${{ inputs.experiment_name }}" ]; then
+                echo "**Experiment Name:** ${{ inputs.experiment_name }}" >> $GITHUB_STEP_SUMMARY
+              fi
+              ;;
+          esac
+
+          if [ -n "${{ inputs.mpich_version }}" ]; then
+            echo "**MPICH Version:** ${{ inputs.mpich_version }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -n "${{ inputs.tag_suffix }}" ]; then
+            echo "**Tag Suffix:** ${{ inputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "**Build Platforms:** ${{ inputs.build_platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Build Results Section
+          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.manifest_successful }}" = "true" ]; then
+            echo "**Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Built Containers" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Multi-architecture manifest (recommended):**" >> $GITHUB_STEP_SUMMARY
+            echo "- \`${{ inputs.manifest_tag }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Architecture-specific images:**" >> $GITHUB_STEP_SUMMARY
+
+            # Parse built images array and list each one
+            IMAGES='${{ inputs.built_images }}'
+            echo "$IMAGES" | jq -r '.[]' | while read -r image; do
+              echo "- \`${image}\`" >> $GITHUB_STEP_SUMMARY
+            done
+
+          elif [ "${{ inputs.build_successful }}" = "true" ]; then
+            echo "**Build Status:** ⚠️ Build succeeded but manifest creation failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Build Status:** ❌ Build failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Validation Results
+          if [ "${{ inputs.validation_successful }}" = "true" ]; then
+            echo "**Validation Status:** ✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ inputs.build_successful }}" = "true" ]; then
+            echo "**Validation Status:** ❌ Validation failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Usage Instructions
+          if [ "${{ inputs.manifest_successful }}" = "true" ]; then
+            echo "## Usage" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            case "${{ inputs.container_type }}" in
+              "dev")
+                echo "Use this container for SST development:" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+                echo "# Pull the development container (multi-arch, auto-selects architecture)" >> $GITHUB_STEP_SUMMARY
+                echo "docker pull ${{ inputs.manifest_tag }}" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "# Run interactively with your SST source mounted" >> $GITHUB_STEP_SUMMARY
+                echo "docker run -it -v \$(pwd):/workspace ${{ inputs.manifest_tag }}" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                ;;
+              "experiment")
+                echo "Pull and run the experiment container:" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+                echo "# Multi-architecture manifest (auto-selects correct architecture):" >> $GITHUB_STEP_SUMMARY
+                echo "docker pull ${{ inputs.manifest_tag }}" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "# Run the container" >> $GITHUB_STEP_SUMMARY
+                echo "docker run -it ${{ inputs.manifest_tag }}" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "# Experiment files are located in /experiments/${{ inputs.experiment_name }}" >> $GITHUB_STEP_SUMMARY
+                echo "# Scripts in the experiment directory are automatically in PATH" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                ;;
+              *)
+                echo "Pull and use the containers:" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+                echo "# Multi-architecture - automatically selects right platform" >> $GITHUB_STEP_SUMMARY
+                echo "docker pull ${{ inputs.manifest_tag }}" >> $GITHUB_STEP_SUMMARY
+                echo "docker run -it ${{ inputs.manifest_tag }}" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "# All images automatically select the correct architecture for your platform" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                ;;
+            esac
+          fi

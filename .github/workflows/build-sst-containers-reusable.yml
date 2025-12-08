@@ -1,0 +1,319 @@
+name: Build SST Containers (Base, for use by other workflows)
+
+on:
+  workflow_call:
+    inputs:
+      container_type:
+        description: 'Type of container to build'
+        required: true
+        type: string  # 'core', 'full', 'dev', 'custom', 'experiment'
+
+      # Common inputs
+      build_platforms:
+        description: 'Platforms to build for'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: string
+
+      image_prefix:
+        description: 'Image prefix (e.g., "sst", "sst-dev")'
+        required: true
+        type: string
+
+      tag_suffix:
+        description: 'Tag suffix for the built images'
+        required: true
+        type: string
+
+      # SST-specific inputs
+      sst_version:
+        description: 'SST version (for release builds)'
+        required: false
+        type: string
+
+      mpich_version:
+        description: 'MPICH version'
+        required: false
+        default: '4.0.2'
+        type: string
+
+      # Custom/Experiment specific
+      sst_core_repo:
+        description: 'SST-core repository URL'
+        required: false
+        type: string
+
+      sst_core_ref:
+        description: 'SST-core reference'
+        required: false
+        type: string
+
+      sst_elements_repo:
+        description: 'SST-elements repository URL'
+        required: false
+        type: string
+
+      sst_elements_ref:
+        description: 'SST-elements reference'
+        required: false
+        type: string
+
+      experiment_name:
+        description: 'Experiment name (for experiment builds)'
+        required: false
+        type: string
+
+      base_image:
+        description: 'Base image for experiment builds'
+        required: false
+        type: string
+
+      # Build configuration
+      containerfile_path:
+        description: 'Path to Containerfile'
+        required: false
+        default: 'Containerfiles/Containerfile'
+        type: string
+
+      docker_context:
+        description: 'Docker build context'
+        required: false
+        default: 'Containerfiles'
+        type: string
+
+      build_target:
+        description: 'Docker build target'
+        required: false
+        type: string
+
+      # Advanced options
+      force_rebuild:
+        description: 'Force rebuild even if images exist'
+        required: false
+        default: false
+        type: boolean
+
+      ignore_cache:
+        description: 'Ignore build cache'
+        required: false
+        default: false
+        type: boolean
+
+    outputs:
+      built_images:
+        description: 'JSON array of built image tags'
+        value: ${{ jobs.collect-images.outputs.built_images }}
+
+      manifest_tag:
+        description: 'Fat manifest tag'
+        value: ${{ jobs.create-manifest.outputs.manifest_tag }}
+
+      build_successful:
+        description: 'Whether build was successful'
+        value: ${{ jobs.create-manifest.outputs.manifest_tag != '' }}
+
+env:
+  REGISTRY: ghcr.io
+  BUILD_NCPUS: 4
+
+jobs:
+  prepare-platforms:
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.setup.outputs.platforms }}
+    steps:
+      - name: Setup platforms
+        id: setup
+        run: |
+          PLATFORMS="${{ inputs.build_platforms }}"
+          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
+
+  build-containers:
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    needs: [prepare-platforms]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        platform: ${{ fromJson(needs.prepare-platforms.outputs.platforms) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract platform info
+        id: platform
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM##*/}"
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
+
+      - name: Prepare container tags
+        id: tags
+        run: |
+          ARCH="${{ steps.platform.outputs.arch }}"
+
+          # Simple tag generation based on container type
+          case "${{ inputs.container_type }}" in
+            "core"|"full")
+              TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}-${{ inputs.container_type }}:${{ inputs.tag_suffix }}-${ARCH}"
+              ;;
+            "dev")
+              TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}-${ARCH}"
+              ;;
+            "experiment")
+              TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}-${ARCH}"
+              ;;
+            *)
+              TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}-${ARCH}"
+              ;;
+          esac
+
+          echo "temp_tag=${TEMP_TAG}" >> $GITHUB_OUTPUT
+          echo "Building: ${TEMP_TAG}"
+
+      - name: Build and push container
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.docker_context }}
+          file: ${{ inputs.containerfile_path }}
+          target: ${{ inputs.build_target }}
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            ${{ inputs.sst_version && format('SSTver={0}', inputs.sst_version) || '' }}
+            ${{ inputs.mpich_version && format('mpich={0}', inputs.mpich_version) || '' }}
+            NCPUS=${{ env.BUILD_NCPUS }}
+          labels: |
+            com.github.sha=${{ github.sha }}
+            com.github.workflow=${{ github.workflow }}
+            com.github.run_id=${{ github.run_id }}
+            com.github.run_number=${{ github.run_number }}
+            com.github.repository=${{ github.repository }}
+            com.github.ref_name=${{ github.ref_name }}
+            com.container.type=${{ inputs.container_type }}
+          tags: ${{ steps.tags.outputs.temp_tag }}
+          push: true
+          cache-from: type=gha,scope=${{ inputs.container_type }}-${{ inputs.tag_suffix }}-${{ steps.platform.outputs.arch }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.container_type }}-${{ inputs.tag_suffix }}-${{ steps.platform.outputs.arch }}
+
+      - name: Output built image
+        run: |
+          echo "Built image: ${{ steps.tags.outputs.temp_tag }}"
+
+  collect-images:
+    runs-on: ubuntu-latest
+    needs: [build-containers]
+    if: needs.build-containers.result == 'success'
+    outputs:
+      built_images: ${{ steps.collect-all.outputs.built_images }}
+    steps:
+      - name: Collect all built images
+        id: collect-all
+        run: |
+          PLATFORMS="${{ inputs.build_platforms }}"
+
+          # Build JSON array of all architecture-specific images
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+          IMAGES="[]"
+
+          for platform in "${PLATFORM_ARRAY[@]}"; do
+            ARCH="${platform#linux/}"
+
+            case "${{ inputs.container_type }}" in
+              "core"|"full")
+                TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}-${{ inputs.container_type }}:${{ inputs.tag_suffix }}-${ARCH}"
+                ;;
+              "dev")
+                TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}-${ARCH}"
+                ;;
+              "experiment")
+                TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}-${ARCH}"
+                ;;
+              *)
+                TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}-${ARCH}"
+                ;;
+            esac
+
+            IMAGES=$(echo "$IMAGES" | jq --arg tag "$TEMP_TAG" '. += [$tag]')
+          done
+
+          echo "built_images=$IMAGES" >> $GITHUB_OUTPUT
+          echo "Collected images: $IMAGES"
+
+  create-manifest:
+    runs-on: ubuntu-latest
+    needs: [collect-images]
+    if: needs.collect-images.result == 'success'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      manifest_tag: ${{ steps.manifest.outputs.manifest_tag }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-architecture manifest
+        id: manifest
+        run: |
+          PLATFORMS="${{ inputs.build_platforms }}"
+
+          # Determine final manifest tag based on container type
+          case "${{ inputs.container_type }}" in
+            "core"|"full")
+              MANIFEST_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}-${{ inputs.container_type }}:${{ inputs.tag_suffix }}"
+              ;;
+            "dev")
+              MANIFEST_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}"
+              ;;
+            "experiment")
+              MANIFEST_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}"
+              ;;
+            *)
+              MANIFEST_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}"
+              ;;
+          esac
+
+          echo "Creating manifest: ${MANIFEST_TAG}"
+
+          # Collect architecture-specific images
+          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
+          MANIFESTS=""
+
+          for platform in "${PLATFORM_ARRAY[@]}"; do
+            ARCH="${platform#linux/}"
+            TEMP_TAG="${MANIFEST_TAG}-${ARCH}"
+            echo "Checking: ${TEMP_TAG}"
+            if docker manifest inspect "${TEMP_TAG}" >/dev/null 2>&1; then
+              MANIFESTS="$MANIFESTS ${TEMP_TAG}"
+              echo "  [OK] Added: ${TEMP_TAG}"
+            fi
+          done
+
+          if [ -n "$MANIFESTS" ]; then
+            echo "Creating multi-arch manifest: ${MANIFEST_TAG}"
+            docker buildx imagetools create --tag "${MANIFEST_TAG}" $MANIFESTS
+            echo "[SUCCESS] Created manifest: ${MANIFEST_TAG}"
+            echo "manifest_tag=${MANIFEST_TAG}" >> $GITHUB_OUTPUT
+          else
+            echo "[ERROR] No images found for manifest creation"
+            exit 1
+          fi

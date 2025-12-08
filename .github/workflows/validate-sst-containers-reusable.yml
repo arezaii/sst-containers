@@ -1,0 +1,126 @@
+name: Validate SST Containers (for use by other workflows)
+
+on:
+  workflow_call:
+    inputs:
+      container_type:
+        description: 'Type of container to validate'
+        required: true
+        type: string  # 'core', 'full', 'dev', 'custom', 'experiment'
+
+      image_tags:
+        description: 'JSON array of image tags to validate'
+        required: true
+        type: string
+
+      build_platforms:
+        description: 'Platforms that were built'
+        required: true
+        type: string
+
+      max_image_size_mb:
+        description: 'Maximum allowed image size in MB'
+        required: false
+        default: 2048  # 2GB default
+        type: number
+
+    outputs:
+      validation_successful:
+        description: 'Whether all validations passed'
+        value: ${{ jobs.validate-containers.result == 'success' }}
+
+jobs:
+  prepare-validation:
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.setup.outputs.platforms }}
+    steps:
+      - name: Setup validation matrix
+        id: setup
+        run: |
+          PLATFORMS="${{ inputs.build_platforms }}"
+          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
+
+  validate-containers:
+    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    needs: [prepare-validation]
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        platform: ${{ fromJson(needs.prepare-validation.outputs.platforms) }}
+    steps:
+      - name: Extract platform info
+        id: platform
+        run: |
+          PLATFORM="${{ matrix.platform }}"
+          ARCH="${PLATFORM##*/}"
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate container
+        run: |
+          ARCH="${{ steps.platform.outputs.arch }}"
+
+          # Parse image tags and find the one for this architecture
+          TAGS='${{ inputs.image_tags }}'
+          IMAGE_TAG=$(echo "$TAGS" | jq -r ".[] | select(contains(\"-${ARCH}:\"))")
+
+          if [ -z "$IMAGE_TAG" ]; then
+            echo "No image found for architecture: $ARCH"
+            exit 1
+          fi
+
+          echo "Validating container: $IMAGE_TAG"
+
+          # Pull and inspect the image
+          docker pull "$IMAGE_TAG"
+
+          # Get image size and validate
+          IMAGE_SIZE=$(docker image inspect "$IMAGE_TAG" --format='{{.Size}}')
+          IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))
+          MAX_SIZE_MB=${{ inputs.max_image_size_mb }}
+
+          echo "Image size: ${IMAGE_SIZE_MB} MB"
+          if [ $IMAGE_SIZE_MB -gt $MAX_SIZE_MB ]; then
+            echo "ERROR: Image size ($IMAGE_SIZE_MB MB) exceeds maximum ($MAX_SIZE_MB MB)"
+            exit 1
+          fi
+
+          # Container type-specific validation
+          case "${{ inputs.container_type }}" in
+            "core"|"full"|"custom")
+              echo "Testing SST installation..."
+              docker run --rm --platform ${{ matrix.platform }} "$IMAGE_TAG" \
+                /bin/bash -c "which sst && sst --version"
+
+              if [ "${{ inputs.container_type }}" = "full" ]; then
+                echo "Testing SST-elements installation..."
+                docker run --rm --platform ${{ matrix.platform }} "$IMAGE_TAG" \
+                  /bin/bash -c "which sst-config && sst-config --VERSION"
+              fi
+              ;;
+            "dev")
+              echo "Testing development environment..."
+              docker run --rm --platform ${{ matrix.platform }} "$IMAGE_TAG" \
+                /bin/bash -c "mpicc --version && gcc --version && python3 --version"
+              ;;
+            "experiment")
+              echo "Testing experiment container..."
+              docker run --rm --platform ${{ matrix.platform }} "$IMAGE_TAG" \
+                /bin/bash -c "ls -la /experiments/ && echo 'Experiment container validated'"
+              ;;
+          esac
+
+          echo "Container validation successful!"
+          echo "✓ Image: $IMAGE_TAG"
+          echo "✓ Size: ${IMAGE_SIZE_MB} MB"
+          echo "✓ Platform: ${{ matrix.platform }}"
+          echo "✓ Type: ${{ inputs.container_type }}"
