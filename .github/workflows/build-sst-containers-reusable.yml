@@ -315,7 +315,7 @@ jobs:
                 ;;
             esac
 
-            IMAGES=$(echo "$IMAGES" | jq --arg tag "$TEMP_TAG" '. += [$tag]')
+            IMAGES=$(echo "$IMAGES" | jq -c --arg tag "$TEMP_TAG" '. += [$tag]')
           done
 
           echo "built_images=$IMAGES" >> $GITHUB_OUTPUT
