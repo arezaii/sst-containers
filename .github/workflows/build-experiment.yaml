@@ -118,8 +118,3 @@ jobs:
       build_platforms: '${{ inputs.build_platforms }}'
       tag_suffix: '${{ inputs.tag_suffix }}'
       experiment_name: '${{ inputs.experiment_name }}'
-      base_image: '${{ inputs.base_image }}'
-      # Additional context from validation
-      experiment_exists: '${{ needs.validate-experiment.outputs.experiment_exists }}'
-      has_containerfile: '${{ needs.validate-experiment.outputs.has_containerfile }}'
-      files_count: '${{ needs.validate-experiment.outputs.files_count }}'
