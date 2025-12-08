@@ -143,21 +143,36 @@ jobs:
 
       - name: Cache MPICH tarball
         id: cache-mpich
+        if: inputs.mpich_version != ''
         uses: actions/cache@v3
         with:
           path: Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
           key: mpich-${{ inputs.mpich_version }}
 
       - name: Download MPICH source
-        if: steps.cache-mpich.outputs.cache-hit != 'true'
+        if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true'
         working-directory: Containerfiles
         run: |
           echo "Downloading MPICH ${{ inputs.mpich_version }}..."
           wget https://www.mpich.org/static/downloads/${{ inputs.mpich_version }}/mpich-${{ inputs.mpich_version }}.tar.gz --no-check-certificate
 
-      - name: Cache SST sources (for core/full builds)
+      - name: List available source files
+        if: inputs.mpich_version != ''
+        working-directory: Containerfiles
+        run: |
+          echo "Files available for ${{ inputs.container_type }} container build:"
+          ls -la *.tar.gz || echo "No .tar.gz files found"
+          echo "Expected MPICH file: mpich-${{ inputs.mpich_version }}.tar.gz"
+          if [ -f "mpich-${{ inputs.mpich_version }}.tar.gz" ]; then
+            echo "[OK] MPICH file exists"
+          else
+            echo "[ERROR] MPICH file missing"
+            exit 1
+          fi
+
+      - name: Cache SST sources
         id: cache-sst
-        if: inputs.container_type == 'core' || inputs.container_type == 'full'
+        if: inputs.sst_version != ''
         uses: actions/cache@v3
         with:
           path: |
@@ -165,8 +180,8 @@ jobs:
             Containerfiles/sstelements-${{ inputs.sst_version }}.tar.gz
           key: sst-sources-${{ inputs.sst_version }}
 
-      - name: Download SST sources (for core/full builds)
-        if: (inputs.container_type == 'core' || inputs.container_type == 'full') && steps.cache-sst.outputs.cache-hit != 'true'
+      - name: Download SST sources
+        if: inputs.sst_version != '' && steps.cache-sst.outputs.cache-hit != 'true'
         working-directory: Containerfiles
         run: |
           echo "Downloading SST ${{ inputs.sst_version }} sources..."
@@ -223,7 +238,7 @@ jobs:
           target: ${{ inputs.build_target }}
           platforms: ${{ matrix.platform }}
           build-args: |
-            ${{ inputs.sst_version && format('SSTver={0}', inputs.sst_version) || '' }}
+            ${{ (inputs.container_type == 'core' || inputs.container_type == 'full') && inputs.sst_version && format('SSTver={0}', inputs.sst_version) || '' }}
             ${{ inputs.mpich_version && format('mpich={0}', inputs.mpich_version) || '' }}
             ${{ inputs.sst_core_repo && format('SSTrepo={0}', inputs.sst_core_repo) || '' }}
             ${{ inputs.sst_core_ref && format('tag={0}', inputs.sst_core_ref) || '' }}
@@ -248,16 +263,23 @@ jobs:
         run: |
           echo "Built image: ${{ steps.tags.outputs.temp_tag }}"
 
-      - name: Upload build dependencies
+      - name: Upload MPICH artifact (for caching across jobs)
         uses: actions/upload-artifact@v4
-        if: steps.cache-mpich.outputs.cache-hit != 'true' || (steps.cache-sst.outputs.cache-hit != 'true' && (inputs.container_type == 'core' || inputs.container_type == 'full'))
+        if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true'
         with:
-          name: sst-sources-${{ inputs.sst_version || 'dev' }}-${{ inputs.mpich_version }}
+          name: mpich-${{ inputs.mpich_version }}
+          path: Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
+          retention-days: 10
+
+      - name: Upload SST sources artifact
+        uses: actions/upload-artifact@v4
+        if: inputs.sst_version != '' && steps.cache-sst.outputs.cache-hit != 'true'
+        with:
+          name: sst-sources-${{ inputs.sst_version }}
           path: |
-            Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
             Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
             Containerfiles/sstelements-${{ inputs.sst_version }}.tar.gz
-          retention-days: 7
+          retention-days: 10
 
   collect-images:
     runs-on: ubuntu-latest
