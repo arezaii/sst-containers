@@ -133,7 +133,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ inputs.manifest_successful }}" = "true" ]; then
-            echo "**Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+            echo "**Build Status:** [SUCCESS] Success" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Built Containers" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -149,18 +149,18 @@ jobs:
             done
 
           elif [ "${{ inputs.build_successful }}" = "true" ]; then
-            echo "**Build Status:** ⚠️ Build succeeded but manifest creation failed" >> $GITHUB_STEP_SUMMARY
+            echo "**Build Status:** [WARNING] Build succeeded but manifest creation failed" >> $GITHUB_STEP_SUMMARY
           else
-            echo "**Build Status:** ❌ Build failed" >> $GITHUB_STEP_SUMMARY
+            echo "**Build Status:** [FAILED] Build failed" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Validation Results
           if [ "${{ inputs.validation_successful }}" = "true" ]; then
-            echo "**Validation Status:** ✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+            echo "**Validation Status:** [PASSED] All tests passed" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ inputs.build_successful }}" = "true" ]; then
-            echo "**Validation Status:** ❌ Validation failed" >> $GITHUB_STEP_SUMMARY
+            echo "**Validation Status:** [FAILED] Validation failed" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
