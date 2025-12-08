@@ -271,9 +271,24 @@ jobs:
           path: Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
           retention-days: 10
 
+      - name: Check if SST sources artifact exists
+        id: check-sst-artifact
+        if: inputs.sst_version != '' && steps.cache-sst.outputs.cache-hit != 'true'
+        run: |
+          # Check if artifact already exists from another job
+          if gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --paginate | jq -r '.artifacts[].name' | grep -q "^sst-sources-${{ inputs.sst_version }}$"; then
+            echo "artifact_exists=true" >> $GITHUB_OUTPUT
+            echo "SST sources artifact already exists, skipping upload"
+          else
+            echo "artifact_exists=false" >> $GITHUB_OUTPUT
+            echo "SST sources artifact does not exist, will upload"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload SST sources artifact
         uses: actions/upload-artifact@v4
-        if: inputs.sst_version != '' && steps.cache-sst.outputs.cache-hit != 'true'
+        if: inputs.sst_version != '' && steps.cache-sst.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true'
         with:
           name: sst-sources-${{ inputs.sst_version }}
           path: |
