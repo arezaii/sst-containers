@@ -52,6 +52,9 @@ env:
 jobs:
   build-core-containers:
     if: contains(inputs.container_types, 'core')
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/build-sst-containers-reusable.yml
     with:
       container_type: 'core'
@@ -69,6 +72,9 @@ jobs:
 
   build-full-containers:
     if: contains(inputs.container_types, 'full')
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/build-sst-containers-reusable.yml
     with:
       container_type: 'full'
@@ -86,6 +92,9 @@ jobs:
 
   validate-core-containers:
     if: contains(inputs.container_types, 'core') && needs.build-core-containers.result == 'success'
+    permissions:
+      contents: read
+      packages: read
     uses: ./.github/workflows/validate-sst-containers-reusable.yml
     needs: [build-core-containers]
     with:
@@ -97,6 +106,9 @@ jobs:
 
   validate-full-containers:
     if: contains(inputs.container_types, 'full') && needs.build-full-containers.result == 'success'
+    permissions:
+      contents: read
+      packages: read
     uses: ./.github/workflows/validate-sst-containers-reusable.yml
     needs: [build-full-containers]
     with:
