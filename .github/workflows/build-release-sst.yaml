@@ -101,7 +101,7 @@ jobs:
       container_type: 'core'
       image_tags: '${{ needs.build-core-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      max_image_size_mb: 2048  # 2GB - from original nightly workflow
+      max_image_size_mb: 2048  # 2GB - enough for core
     secrets: inherit
 
   validate-full-containers:
@@ -115,7 +115,7 @@ jobs:
       container_type: 'full'
       image_tags: '${{ needs.build-full-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      max_image_size_mb: 2048  # 2GB - from original nightly workflow
+      max_image_size_mb: 4096  # 4GB - full build is larger
     secrets: inherit
 
   generate-summary:
