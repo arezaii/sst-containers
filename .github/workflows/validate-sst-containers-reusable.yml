@@ -71,7 +71,7 @@ jobs:
 
           # Parse image tags and find the one for this architecture
           TAGS='${{ inputs.image_tags }}'
-          IMAGE_TAG=$(echo "$TAGS" | jq -r ".[] | select(contains(\"-${ARCH}:\"))")
+          IMAGE_TAG=$(echo "$TAGS" | jq -r ".[] | select(endswith(\"-${ARCH}\"))")
 
           if [ -z "$IMAGE_TAG" ]; then
             echo "No image found for architecture: $ARCH"
