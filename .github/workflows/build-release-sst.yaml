@@ -36,603 +36,123 @@ on:
         required: false
         default: false
         type: boolean
+      container_types:
+        description: 'Container types to build'
+        required: false
+        default: 'core,full'
+        type: choice
+        options:
+          - 'core,full'
+          - 'core'
+          - 'full'
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}/sst
-  BUILD_NCPUS: 4
 
 jobs:
-  check-existing-images:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    outputs:
-      core_amd64_exists: ${{ steps.check.outputs.core_amd64_exists }}
-      core_arm64_exists: ${{ steps.check.outputs.core_arm64_exists }}
-      full_amd64_exists: ${{ steps.check.outputs.full_amd64_exists }}
-      full_arm64_exists: ${{ steps.check.outputs.full_arm64_exists }}
-      should_build_core: ${{ steps.check.outputs.should_build_core }}
-      should_build_full: ${{ steps.check.outputs.should_build_full }}
-      platforms: ${{ steps.check.outputs.platforms }}
-    steps:
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check existing container images
-        id: check
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          SST_VERSION="${{ inputs.sst_version }}"
-          FORCE_REBUILD="${{ inputs.force_rebuild }}"
-
-          echo "Checking for existing SST $SST_VERSION containers..."
-
-          # Parse build platforms into JSON array for matrix
-          PLATFORMS="${{ inputs.build_platforms }}"
-          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
-          echo "::notice::Platforms: $PLATFORMS"
-
-          # Function to check if image exists
-          check_image_exists() {
-            local image_name="$1"
-            local tag="$2"
-            echo "Checking for image: $image_name:$tag"
-
-            # Try to pull the image manifest to check if it exists
-            if docker manifest inspect ${{ env.REGISTRY }}/${{ github.repository_owner }}/${image_name}:${tag} >/dev/null 2>&1; then
-              echo "  [FOUND] $image_name:$tag"
-              return 0
-            else
-              echo "  [NOT FOUND] $image_name:$tag"
-              return 1
-            fi
-          }
-
-          # Extract package names from IMAGE_PREFIX
-          CORE_PACKAGE="${{ env.IMAGE_PREFIX }}-core"
-          FULL_PACKAGE="${{ env.IMAGE_PREFIX }}-full"
-
-          # Remove registry prefix to get just the package name
-          CORE_PACKAGE_NAME="${CORE_PACKAGE#*/}"
-          FULL_PACKAGE_NAME="${FULL_PACKAGE#*/}"
-
-          # Check core images (now using temporary architecture-specific tags)
-          if check_image_exists "$CORE_PACKAGE_NAME" "$SST_VERSION-amd64"; then
-            echo "core_amd64_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "core_amd64_exists=false" >> $GITHUB_OUTPUT
-          fi
-
-          if check_image_exists "$CORE_PACKAGE_NAME" "$SST_VERSION-arm64"; then
-            echo "core_arm64_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "core_arm64_exists=false" >> $GITHUB_OUTPUT
-          fi
-
-          # Check full images (now using temporary architecture-specific tags)
-          if check_image_exists "$FULL_PACKAGE_NAME" "$SST_VERSION-amd64"; then
-            echo "full_amd64_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "full_amd64_exists=false" >> $GITHUB_OUTPUT
-          fi
-
-          if check_image_exists "$FULL_PACKAGE_NAME" "$SST_VERSION-arm64"; then
-            echo "full_arm64_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "full_arm64_exists=false" >> $GITHUB_OUTPUT
-          fi
-
-          # Determine if we should build (either force rebuild or images don't exist)
-          if [ "$FORCE_REBUILD" = "true" ]; then
-            echo "should_build_core=true" >> $GITHUB_OUTPUT
-            echo "should_build_full=true" >> $GITHUB_OUTPUT
-            echo "::notice::Force rebuild enabled - will rebuild all containers"
-          else
-            # Check if any core images are missing
-            if [ "$(cat $GITHUB_OUTPUT | grep 'core.*_exists=false' | wc -l)" -gt 0 ]; then
-              echo "should_build_core=true" >> $GITHUB_OUTPUT
-            else
-              echo "should_build_core=false" >> $GITHUB_OUTPUT
-            fi
-
-            # Check if any full images are missing
-            if [ "$(cat $GITHUB_OUTPUT | grep 'full.*_exists=false' | wc -l)" -gt 0 ]; then
-              echo "should_build_full=true" >> $GITHUB_OUTPUT
-            else
-              echo "should_build_full=false" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-  download-sources:
-    runs-on: ubuntu-latest
-    needs: check-existing-images
-    if: needs.check-existing-images.outputs.should_build_core == 'true' || needs.check-existing-images.outputs.should_build_full == 'true'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Cache source tarballs
-        if: inputs.ignore_cache != true
-        uses: actions/cache@v4
-        with:
-          path: Containerfiles/*.tar.gz
-          key: sst-sources-${{ inputs.sst_version }}-${{ inputs.mpich_version }}
-          restore-keys: |
-            sst-sources-${{ inputs.sst_version }}-
-            sst-sources-
-
-      - name: Download SST source tarballs
-        run: |
-          cd Containerfiles
-
-          # Make download script executable
-          chmod +x download_tarballs.sh
-
-          # Remove existing files if ignore_cache is true
-          if [ "${{ inputs.ignore_cache }}" = "true" ]; then
-            echo "Ignoring cache - removing existing tarballs..."
-            rm -f *.tar.gz
-          fi
-
-          # Download sources
-          ./download_tarballs.sh ${{ inputs.sst_version }} ${{ inputs.mpich_version }}
-
-          # List downloaded files
-          echo "Downloaded files:"
-          ls -la *.tar.gz
-
-      - name: Upload source artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: sst-sources-${{ inputs.sst_version }}-${{ inputs.mpich_version }}
-          path: Containerfiles/*.tar.gz
-          retention-days: 1
-
   build-core-containers:
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [check-existing-images, download-sources]
-    if: needs.check-existing-images.outputs.should_build_core == 'true'
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      matrix:
-        platform: ${{ fromJson(needs.check-existing-images.outputs.platforms) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download source artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: sst-sources-${{ inputs.sst_version }}-${{ inputs.mpich_version }}
-          path: Containerfiles/
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract platform info
-        id: platform
-        run: |
-          PLATFORM="${{ matrix.platform }}"
-          ARCH="${PLATFORM##*/}"
-          echo "arch=$ARCH" >> $GITHUB_OUTPUT
-          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
-
-      - name: Prepare tags for SST-core
-        id: core_tags
-        run: |
-          # Use temporary architecture-specific tags that will be used only for manifest creation
-          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${{ inputs.sst_version }}-${{ steps.platform.outputs.arch }}"
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
-
-      - name: Build and push SST-core container
-        uses: docker/build-push-action@v5
-        with:
-          context: Containerfiles
-          file: Containerfiles/Containerfile
-          target: sst-core
-          build-args: |
-            SSTver=${{ inputs.sst_version }}
-            mpich=${{ inputs.mpich_version }}
-            NCPUS=${{ env.BUILD_NCPUS }}
-          labels: |
-            com.github.sha=${{ github.sha }}
-            com.github.workflow=${{ github.workflow }}
-            com.github.run_id=${{ github.run_id }}
-            com.github.run_number=${{ github.run_number }}
-            com.github.repository=${{ github.repository }}
-            com.github.ref_name=${{ github.ref_name }}
-          tags: ${{ steps.core_tags.outputs.tags }}
-          push: true
-          cache-from: type=gha,scope=sst-core-${{ steps.platform.outputs.arch }}
-          cache-to: type=gha,mode=max,scope=sst-core-${{ steps.platform.outputs.arch }}
+    if: contains(inputs.container_types, 'core')
+    uses: ./.github/workflows/build-sst-containers-reusable.yml
+    with:
+      container_type: 'core'
+      image_prefix: '${{ github.repository_owner }}/sst'
+      tag_suffix: '${{ inputs.sst_version }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      sst_version: '${{ inputs.sst_version }}'
+      mpich_version: '${{ inputs.mpich_version }}'
+      containerfile_path: 'Containerfiles/Containerfile'
+      docker_context: 'Containerfiles'
+      build_target: 'sst-core'
+      force_rebuild: ${{ inputs.force_rebuild }}
+      ignore_cache: ${{ inputs.ignore_cache }}
+    secrets: inherit
 
   build-full-containers:
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [check-existing-images, download-sources]
-    if: needs.check-existing-images.outputs.should_build_full == 'true'
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      matrix:
-        platform: ${{ fromJson(needs.check-existing-images.outputs.platforms) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    if: contains(inputs.container_types, 'full')
+    uses: ./.github/workflows/build-sst-containers-reusable.yml
+    with:
+      container_type: 'full'
+      image_prefix: '${{ github.repository_owner }}/sst'
+      tag_suffix: '${{ inputs.sst_version }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      sst_version: '${{ inputs.sst_version }}'
+      mpich_version: '${{ inputs.mpich_version }}'
+      containerfile_path: 'Containerfiles/Containerfile'
+      docker_context: 'Containerfiles'
+      build_target: 'sst-full'
+      force_rebuild: ${{ inputs.force_rebuild }}
+      ignore_cache: ${{ inputs.ignore_cache }}
+    secrets: inherit
 
-      - name: Download source artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: sst-sources-${{ inputs.sst_version }}-${{ inputs.mpich_version }}
-          path: Containerfiles/
+  validate-core-containers:
+    if: contains(inputs.container_types, 'core') && needs.build-core-containers.result == 'success'
+    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    needs: [build-core-containers]
+    with:
+      container_type: 'core'
+      image_tags: '${{ needs.build-core-containers.outputs.built_images }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      max_image_size_mb: 2048  # 2GB - from original nightly workflow
+    secrets: inherit
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+  validate-full-containers:
+    if: contains(inputs.container_types, 'full') && needs.build-full-containers.result == 'success'
+    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    needs: [build-full-containers]
+    with:
+      container_type: 'full'
+      image_tags: '${{ needs.build-full-containers.outputs.built_images }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      max_image_size_mb: 2048  # 2GB - from original nightly workflow
+    secrets: inherit
 
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract platform info
-        id: platform
-        run: |
-          PLATFORM="${{ matrix.platform }}"
-          ARCH="${PLATFORM##*/}"
-          echo "arch=$ARCH" >> $GITHUB_OUTPUT
-          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
-
-      - name: Prepare tags for SST-full
-        id: full_tags
-        run: |
-          # Use temporary architecture-specific tags that will be used only for manifest creation
-          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}-${{ steps.platform.outputs.arch }}"
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
-
-      - name: Build and push SST-full container
-        uses: docker/build-push-action@v5
-        with:
-          context: Containerfiles
-          file: Containerfiles/Containerfile
-          target: sst-full
-          build-args: |
-            SSTver=${{ inputs.sst_version }}
-            mpich=${{ inputs.mpich_version }}
-            NCPUS=${{ env.BUILD_NCPUS }}
-          labels: |
-            com.github.sha=${{ github.sha }}
-            com.github.workflow=${{ github.workflow }}
-            com.github.run_id=${{ github.run_id }}
-            com.github.run_number=${{ github.run_number }}
-            com.github.repository=${{ github.repository }}
-            com.github.ref_name=${{ github.ref_name }}
-          tags: ${{ steps.full_tags.outputs.tags }}
-          push: true
-          cache-from: type=gha,scope=sst-full-${{ steps.platform.outputs.arch }}
-          cache-to: type=gha,mode=max,scope=sst-full-${{ steps.platform.outputs.arch }}
-
-  validate-containers:
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [check-existing-images, build-core-containers, build-full-containers]
-    if: always() && (needs.build-core-containers.result == 'success' || needs.build-full-containers.result == 'success')
-    permissions:
-      contents: read
-      packages: read
-    strategy:
-      matrix:
-        type: [core, full]
-        platform: ${{ fromJson(needs.check-existing-images.outputs.platforms) }}
-    steps:
-      - name: Check if build succeeded for this type
-        id: check
-        run: |
-          TYPE="${{ matrix.type }}"
-          if [ "$TYPE" = "core" ]; then
-            BUILD_RESULT="${{ needs.build-core-containers.result }}"
-          else
-            BUILD_RESULT="${{ needs.build-full-containers.result }}"
-          fi
-
-          echo "build_result=${BUILD_RESULT}" >> $GITHUB_OUTPUT
-
-          if [ "$BUILD_RESULT" != "success" ]; then
-            echo "::notice::Skipping validation for $TYPE - build did not succeed"
-            exit 0
-          fi
-
-      - name: Extract architecture from platform
-        if: steps.check.outputs.build_result == 'success'
-        id: arch
-        run: |
-          PLATFORM="${{ matrix.platform }}"
-          ARCH="${PLATFORM#linux/}"
-          echo "arch=${ARCH}" >> $GITHUB_OUTPUT
-          echo "::notice::Validating architecture: ${ARCH}"
-
-      - name: Validate container
-        if: steps.check.outputs.build_result == 'success'
-        run: |
-          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.type }}:${{ inputs.sst_version }}-${{ steps.arch.outputs.arch }}"
-
-          echo "Validating container: $IMAGE_NAME"
-
-          # Pull and run basic validation
-          docker pull "$IMAGE_NAME"
-
-          # Test SST installation
-          echo "sst --version" | docker run --rm -i "$IMAGE_NAME"
-          echo "sst-info --version" | docker run --rm -i "$IMAGE_NAME"
-
-          # Get image size
-          IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
-          IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))
-
-          echo "Container validation successful!"
-          echo "Image: $IMAGE_NAME"
-          echo "Size: ${IMAGE_SIZE_MB} MB"
-          echo "Platform: ${{ matrix.platform }}"
-          echo "Type: SST-${{ matrix.type }}"
-
-  create-manifest-lists:
-    runs-on: ubuntu-latest
-    needs: [check-existing-images, build-core-containers, build-full-containers]
-    if: always() && (needs.build-core-containers.result == 'success' || needs.build-full-containers.result == 'success')
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install jq for manifest parsing
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create multi-architecture manifest lists
-        run: |
-          SST_VERSION="${{ inputs.sst_version }}"
-          TAG_LATEST="${{ inputs.tag_as_latest }}"
-
-          # Determine which platforms were built
-          PLATFORMS="${{ inputs.build_platforms }}"
-          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
-
-          echo "Creating manifest lists for platforms: ${PLATFORMS}"
-
-          # Define package names from IMAGE_PREFIX
-          CORE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core"
-          FULL_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full"
-
-          # Create core manifest if core was built
-          if [ "${{ needs.build-core-containers.result }}" = "success" ]; then
-            echo "Creating ${CORE_IMAGE} manifest lists..."
-            CORE_MANIFESTS=""
-
-            # Collect architecture-specific temporary tags
-            for platform in "${PLATFORM_ARRAY[@]}"; do
-              ARCH="${platform#linux/}"
-              TEMP_TAG="${CORE_IMAGE}:${SST_VERSION}-${ARCH}"
-
-              echo "Checking: $TEMP_TAG"
-              if docker manifest inspect "$TEMP_TAG" >/dev/null 2>&1; then
-                CORE_MANIFESTS="$CORE_MANIFESTS $TEMP_TAG"
-                echo "  [OK] Added temporary tag: $TEMP_TAG"
-              else
-                echo "  [MISS] Temporary tag not found: $TEMP_TAG"
-              fi
-            done
-
-            # Create multi-arch manifest from temporary tags
-            if [ -n "$CORE_MANIFESTS" ]; then
-              echo "Creating multi-arch manifest: ${CORE_IMAGE}:${SST_VERSION}"
-              docker buildx imagetools create \
-                --tag ${CORE_IMAGE}:${SST_VERSION} \
-                $CORE_MANIFESTS
-
-              # Create latest manifest if requested
-              if [ "$TAG_LATEST" = "true" ]; then
-                echo "Creating latest manifest: ${CORE_IMAGE}:latest"
-                docker buildx imagetools create \
-                  --tag ${CORE_IMAGE}:latest \
-                  $CORE_MANIFESTS
-              fi
-
-              echo "[SUCCESS] ${CORE_IMAGE} manifest lists created successfully"
-            else
-              echo "[ERROR] No temporary core images found for manifest creation"
-            fi
-          fi
-
-          # Create full manifest if full was built
-          if [ "${{ needs.build-full-containers.result }}" = "success" ]; then
-            echo "Creating ${FULL_IMAGE} manifest lists..."
-            FULL_MANIFESTS=""
-
-            # Collect architecture-specific temporary tags
-            for platform in "${PLATFORM_ARRAY[@]}"; do
-              ARCH="${platform#linux/}"
-              TEMP_TAG="${FULL_IMAGE}:${SST_VERSION}-${ARCH}"
-
-              echo "Checking: $TEMP_TAG"
-              if docker manifest inspect "$TEMP_TAG" >/dev/null 2>&1; then
-                FULL_MANIFESTS="$FULL_MANIFESTS $TEMP_TAG"
-                echo "  [OK] Added temporary tag: $TEMP_TAG"
-              else
-                echo "  [MISS] Temporary tag not found: $TEMP_TAG"
-              fi
-            done
-
-            # Create multi-arch manifest from temporary tags
-            if [ -n "$FULL_MANIFESTS" ]; then
-              echo "Creating multi-arch manifest: ${FULL_IMAGE}:${SST_VERSION}"
-              docker buildx imagetools create \
-                --tag ${FULL_IMAGE}:${SST_VERSION} \
-                $FULL_MANIFESTS
-
-              # Create latest manifest if requested
-              if [ "$TAG_LATEST" = "true" ]; then
-                echo "Creating latest manifest: ${FULL_IMAGE}:latest"
-                docker buildx imagetools create \
-                  --tag ${FULL_IMAGE}:latest \
-                  $FULL_MANIFESTS
-              fi
-
-              echo "[SUCCESS] ${FULL_IMAGE} manifest lists created successfully"
-            else
-              echo "[ERROR] No temporary full images found for manifest creation"
-            fi
-          fi
-
-      - name: Cleanup temporary architecture-specific tags
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          SST_VERSION="${{ inputs.sst_version }}"
-          PLATFORMS="${{ inputs.build_platforms }}"
-          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
-
-          # Define package names from IMAGE_PREFIX (extract just the package name, not the full registry path)
-          CORE_PACKAGE_NAME="${{ env.IMAGE_PREFIX }}-core"
-          FULL_PACKAGE_NAME="${{ env.IMAGE_PREFIX }}-full"
-
-          echo "Cleaning up temporary architecture-specific tags..."
-
-          # Clean up core temporary tags
-          if [ "${{ needs.build-core-containers.result }}" = "success" ]; then
-            for platform in "${PLATFORM_ARRAY[@]}"; do
-              ARCH="${platform#linux/}"
-              TEMP_TAG="${SST_VERSION}-${ARCH}"
-
-              echo "Attempting to delete temporary tag: ${CORE_PACKAGE_NAME}:$TEMP_TAG"
-
-              # Get version ID for the temporary tag
-              VERSION_ID=$(gh api "/user/packages/container/${CORE_PACKAGE_NAME}/versions" --paginate | \
-                jq -r --arg tag "$TEMP_TAG" '.[] | select(.metadata.container.tags[]? == $tag) | .id' | head -1)
-
-              if [ -n "$VERSION_ID" ] && [ "$VERSION_ID" != "null" ]; then
-                echo "  Deleting version ID: $VERSION_ID"
-                gh api --method DELETE "/user/packages/container/${CORE_PACKAGE_NAME}/versions/$VERSION_ID" || true
-              else
-                echo "  No version found for tag: $TEMP_TAG"
-              fi
-            done
-          fi
-
-          # Clean up full temporary tags
-          if [ "${{ needs.build-full-containers.result }}" = "success" ]; then
-            for platform in "${PLATFORM_ARRAY[@]}"; do
-              ARCH="${platform#linux/}"
-              TEMP_TAG="${SST_VERSION}-${ARCH}"
-
-              echo "Attempting to delete temporary tag: ${FULL_PACKAGE_NAME}:$TEMP_TAG"
-
-              # Get version ID for the temporary tag
-              VERSION_ID=$(gh api "/user/packages/container/${FULL_PACKAGE_NAME}/versions" --paginate | \
-                jq -r --arg tag "$TEMP_TAG" '.[] | select(.metadata.container.tags[]? == $tag) | .id' | head -1)
-
-              if [ -n "$VERSION_ID" ] && [ "$VERSION_ID" != "null" ]; then
-                echo "  Deleting version ID: $VERSION_ID"
-                gh api --method DELETE "/user/packages/container/${FULL_PACKAGE_NAME}/versions/$VERSION_ID" || true
-              else
-                echo "  No version found for tag: $TEMP_TAG"
-              fi
-            done
-          fi
-
-          echo "Temporary tag cleanup completed"
-
-  summary:
-    runs-on: ubuntu-latest
-    needs: [check-existing-images, build-core-containers, build-full-containers, validate-containers, create-manifest-lists]
+  generate-summary:
+    uses: ./.github/workflows/generate-build-summary-reusable.yml
+    needs: [build-core-containers, build-full-containers, validate-core-containers, validate-full-containers]
     if: always()
+    with:
+      workflow_type: 'release'
+      container_type: '${{ inputs.container_types }}'
+      build_successful: ${{ (needs.build-core-containers.result == 'success' || needs.build-core-containers.result == 'skipped') && (needs.build-full-containers.result == 'success' || needs.build-full-containers.result == 'skipped') }}
+      manifest_successful: ${{ (needs.build-core-containers.result == 'success' || needs.build-core-containers.result == 'skipped') && (needs.build-full-containers.result == 'success' || needs.build-full-containers.result == 'skipped') }}
+      validation_successful: ${{ (needs.validate-core-containers.result == 'success' || needs.validate-core-containers.result == 'skipped') && (needs.validate-full-containers.result == 'success' || needs.validate-full-containers.result == 'skipped') }}
+      manifest_tag: '${{ needs.build-core-containers.outputs.manifest_tag || needs.build-full-containers.outputs.manifest_tag }}'
+      built_images: '${{ needs.build-core-containers.outputs.built_images || needs.build-full-containers.outputs.built_images }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      tag_suffix: '${{ inputs.sst_version }}'
+      sst_version: '${{ inputs.sst_version }}'
+      mpich_version: '${{ inputs.mpich_version }}'
+
+  # Optional: Tag as latest if requested
+  tag-as-latest:
+    runs-on: ubuntu-latest
+    needs: [build-core-containers, build-full-containers]
+    if: inputs.tag_as_latest && ((needs.build-core-containers.result == 'success' || needs.build-core-containers.result == 'skipped') && (needs.build-full-containers.result == 'success' || needs.build-full-containers.result == 'skipped'))
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Build Summary
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag containers as latest
         run: |
-          echo "# SST Release Container Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**SST Version:** ${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**MPICH Version:** ${{ inputs.mpich_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Force Rebuild:** ${{ inputs.force_rebuild }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Ignore Cache:** ${{ inputs.ignore_cache }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Platforms:** ${{ inputs.build_platforms }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Tag as Latest:** ${{ inputs.tag_as_latest }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Tagging SST ${{ inputs.sst_version }} containers as 'latest'"
 
-          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          # Core containers
-          if [ "${{ needs.build-core-containers.result }}" == "success" ]; then
-            echo "[SUCCESS] **SST-Core Containers:** Built successfully" >> $GITHUB_STEP_SUMMARY
-            if [ "${{ needs.create-manifest-lists.result }}" == "success" ]; then
-              echo "- **Multi-arch**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
-              if [ "${{ inputs.tag_as_latest }}" = "true" ]; then
-                echo "- **Latest**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:latest\`" >> $GITHUB_STEP_SUMMARY
-              fi
-            fi
-            echo "- **Architecture-specific builds**: Completed for all requested platforms" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.check-existing-images.outputs.should_build_core }}" == "true" ]; then
-            echo "[FAILED] **SST-Core Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "[SKIPPED] **SST-Core Containers:** Skipped (already exist)" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ inputs.container_types }}" == *"core"* ]]; then
+            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core:${{ inputs.sst_version }}"
+            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core:latest"
+            echo "Tagging core: $SOURCE_TAG -> $LATEST_TAG"
+            docker buildx imagetools create --tag "$LATEST_TAG" "$SOURCE_TAG"
           fi
 
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          # Full containers
-          if [ "${{ needs.build-full-containers.result }}" == "success" ]; then
-            echo "[SUCCESS] **SST-Full Containers:** Built successfully" >> $GITHUB_STEP_SUMMARY
-            if [ "${{ needs.create-manifest-lists.result }}" == "success" ]; then
-              echo "- **Multi-arch**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}\`" >> $GITHUB_STEP_SUMMARY
-              if [ "${{ inputs.tag_as_latest }}" = "true" ]; then
-                echo "- **Latest**: \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:latest\`" >> $GITHUB_STEP_SUMMARY
-              fi
-            fi
-            echo "- **Architecture-specific builds**: Completed for all requested platforms" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.check-existing-images.outputs.should_build_full }}" == "true" ]; then
-            echo "[FAILED] **SST-Full Containers:** Build failed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "[SKIPPED] **SST-Full Containers:** Skipped (already exist)" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ inputs.container_types }}" == *"full"* ]]; then
+            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-full:${{ inputs.sst_version }}"
+            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-full:latest"
+            echo "Tagging full: $SOURCE_TAG -> $LATEST_TAG"
+            docker buildx imagetools create --tag "$LATEST_TAG" "$SOURCE_TAG"
           fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Usage" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Pull and use the containers:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# Multi-architecture - automatically selects right platform" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# Full SST with elements (larger image)" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full:${{ inputs.sst_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# All images automatically select the correct architecture for your platform" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
