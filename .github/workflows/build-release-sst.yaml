@@ -58,7 +58,7 @@ jobs:
     uses: ./.github/workflows/build-sst-containers-reusable.yml
     with:
       container_type: 'core'
-      image_prefix: '${{ github.repository_owner }}/sst'
+      image_prefix: '${{ github.repository_owner }}/ar-sst'
       tag_suffix: '${{ inputs.sst_version }}'
       build_platforms: '${{ inputs.build_platforms }}'
       sst_version: '${{ inputs.sst_version }}'
@@ -78,7 +78,7 @@ jobs:
     uses: ./.github/workflows/build-sst-containers-reusable.yml
     with:
       container_type: 'full'
-      image_prefix: '${{ github.repository_owner }}/sst'
+      image_prefix: '${{ github.repository_owner }}/ar-sst'
       tag_suffix: '${{ inputs.sst_version }}'
       build_platforms: '${{ inputs.build_platforms }}'
       sst_version: '${{ inputs.sst_version }}'
@@ -156,15 +156,15 @@ jobs:
           echo "Tagging SST ${{ inputs.sst_version }} containers as 'latest'"
 
           if [[ "${{ inputs.container_types }}" == *"core"* ]]; then
-            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core:${{ inputs.sst_version }}"
-            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core:latest"
+            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-core:${{ inputs.sst_version }}"
+            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-core:latest"
             echo "Tagging core: $SOURCE_TAG -> $LATEST_TAG"
             docker buildx imagetools create --tag "$LATEST_TAG" "$SOURCE_TAG"
           fi
 
           if [[ "${{ inputs.container_types }}" == *"full"* ]]; then
-            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-full:${{ inputs.sst_version }}"
-            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-full:latest"
+            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-full:${{ inputs.sst_version }}"
+            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-full:latest"
             echo "Tagging full: $SOURCE_TAG -> $LATEST_TAG"
             docker buildx imagetools create --tag "$LATEST_TAG" "$SOURCE_TAG"
           fi
