@@ -1,4 +1,4 @@
-name: Build SST Containers (Base, for use by other workflows)
+name: Build SST Containers (for use by other workflows)
 
 on:
   workflow_call:
