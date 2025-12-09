@@ -28,7 +28,7 @@ on:
       build_platforms:
         description: 'Platforms to build for'
         required: false
-        default: 'linux/amd64'
+        default: 'linux/amd64,linux/arm64'
         type: choice
         options:
           - 'linux/amd64,linux/arm64'
@@ -41,8 +41,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}/sst
-  BUILD_NCPUS: 4
 
 jobs:
   validate-inputs:
@@ -51,12 +49,9 @@ jobs:
       contents: read
     outputs:
       build_type: ${{ steps.validate.outputs.build_type }}
-      core_short_sha: ${{ steps.validate.outputs.core_short_sha }}
-      elements_short_sha: ${{ steps.validate.outputs.elements_short_sha }}
       tag_suffix: ${{ steps.validate.outputs.tag_suffix }}
-      platforms: ${{ steps.validate.outputs.platforms }}
     steps:
-      - name: Validate inputs
+      - name: Validate inputs and determine build parameters
         id: validate
         run: |
           # Determine build type
@@ -70,328 +65,70 @@ jobs:
             echo "build_type=core" >> $GITHUB_OUTPUT
           fi
 
-          # Get short SHAs for tagging
-          # For core
-          CORE_SHA="${{ inputs.sst_core_ref }}"
-          CORE_SHORT_SHA=$(echo "$CORE_SHA" | cut -c1-7)
-          echo "core_short_sha=$CORE_SHORT_SHA" >> $GITHUB_OUTPUT
-
-          # For elements (if provided)
-          if [ -n "${{ inputs.sst_elements_ref }}" ]; then
-            ELEMENTS_SHA="${{ inputs.sst_elements_ref }}"
-            ELEMENTS_SHORT_SHA=$(echo "$ELEMENTS_SHA" | cut -c1-7)
-            echo "elements_short_sha=$ELEMENTS_SHORT_SHA" >> $GITHUB_OUTPUT
-          fi
-
           # Determine tag suffix
           if [ -n "${{ inputs.custom_tag_suffix }}" ]; then
             echo "tag_suffix=${{ inputs.custom_tag_suffix }}" >> $GITHUB_OUTPUT
           else
+            # Get short SHA for tagging
+            CORE_SHA="${{ inputs.sst_core_ref }}"
+            CORE_SHORT_SHA=$(echo "$CORE_SHA" | cut -c1-7)
+
             # Extract repo owner from core repo URL
             REPO_URL="${{ inputs.sst_core_repo }}"
             REPO_OWNER=$(echo "$REPO_URL" | sed -E 's/.*[:/]([^/]+)\/[^/]+\.git/\1/')
             echo "tag_suffix=${REPO_OWNER}-${CORE_SHORT_SHA}" >> $GITHUB_OUTPUT
           fi
 
-          # Parse build platforms into JSON array for matrix
-          PLATFORMS="${{ inputs.build_platforms }}"
-          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
-
           echo "::notice::Build type: $(cat $GITHUB_OUTPUT | grep build_type | cut -d= -f2)"
           echo "::notice::Tag suffix: $(cat $GITHUB_OUTPUT | grep tag_suffix | cut -d= -f2)"
-          echo "::notice::Platforms: $PLATFORMS"
-
-  download-mpich:
-    runs-on: ubuntu-latest
-    needs: validate-inputs
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Cache MPICH tarball
-        uses: actions/cache@v4
-        with:
-          path: Containerfiles/*.tar.gz
-          key: mpich-${{ inputs.mpich_version }}
-          restore-keys: |
-            mpich-
-
-      - name: Download MPICH source
-        run: |
-          cd Containerfiles
-
-          # Make download script executable
-          chmod +x download_tarballs.sh
-
-          # Check if MPICH tarball exists
-          MPICH_FILE="mpich-${{ inputs.mpich_version }}.tar.gz"
-          if [ -f "$MPICH_FILE" ]; then
-            echo "MPICH tarball already exists, skipping download"
-          else
-            echo "Downloading MPICH ${{ inputs.mpich_version }}..."
-            wget --no-check-certificate \
-              https://www.mpich.org/static/downloads/${{ inputs.mpich_version }}/mpich-${{ inputs.mpich_version }}.tar.gz
-          fi
-
-          # List downloaded files
-          echo "Files in Containerfiles directory:"
-          ls -la *.tar.gz || echo "No tarballs found"
-
-      - name: Upload MPICH artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mpich-${{ inputs.mpich_version }}
-          path: Containerfiles/*.tar.gz
-          retention-days: 1
 
   build-custom-containers:
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [validate-inputs, download-mpich]
+    needs: [validate-inputs]
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        platform: ${{ fromJson(needs.validate-inputs.outputs.platforms) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    uses: ./.github/workflows/build-sst-containers-reusable.yml
+    with:
+      container_type: '${{ needs.validate-inputs.outputs.build_type }}'
+      image_prefix: '${{ github.repository_owner }}/ar-sst'
+      tag_suffix: '${{ needs.validate-inputs.outputs.tag_suffix }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      mpich_version: '${{ inputs.mpich_version }}'
+      sst_core_repo: '${{ inputs.sst_core_repo }}'
+      sst_core_ref: '${{ inputs.sst_core_ref }}'
+      sst_elements_repo: '${{ inputs.sst_elements_repo }}'
+      sst_elements_ref: '${{ inputs.sst_elements_ref }}'
+      containerfile_path: 'Containerfiles/Containerfile.tag'
+      docker_context: 'Containerfiles'
+      build_target: ${{ needs.validate-inputs.outputs.build_type == 'full' && 'sst-full' || 'sst-core' }}
+    secrets: inherit
 
-      - name: Download MPICH artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: mpich-${{ inputs.mpich_version }}
-          path: Containerfiles/
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract platform info
-        id: platform
-        run: |
-          PLATFORM="${{ matrix.platform }}"
-          ARCH="${PLATFORM##*/}"
-          echo "arch=$ARCH" >> $GITHUB_OUTPUT
-          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
-
-      - name: Determine build target and tags
-        id: build_info
-        run: |
-          BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
-          TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
-
-          if [ "$BUILD_TYPE" = "full" ]; then
-            echo "target=full-build" >> $GITHUB_OUTPUT
-            echo "image_name=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}" >> $GITHUB_OUTPUT
-          else
-            echo "target=core-build" >> $GITHUB_OUTPUT
-            echo "image_name=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}" >> $GITHUB_OUTPUT
-          fi
-
-          echo "tags<<EOF" >> $GITHUB_OUTPUT
-          if [ "$BUILD_TYPE" = "full" ]; then
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-full-${{ steps.platform.outputs.arch }}:${TAG_SUFFIX}" >> $GITHUB_OUTPUT
-          else
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-core-${{ steps.platform.outputs.arch }}:${TAG_SUFFIX}" >> $GITHUB_OUTPUT
-          fi
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Build and push custom SST container
-        uses: docker/build-push-action@v5
-        with:
-          context: Containerfiles
-          file: Containerfiles/Containerfile.tag
-          target: ${{ steps.build_info.outputs.target }}
-          build-args: |
-            SSTrepo=${{ inputs.sst_core_repo }}
-            tag=${{ inputs.sst_core_ref }}
-            SSTElementsRepo=${{ inputs.sst_elements_repo }}
-            elementsTag=${{ inputs.sst_elements_ref }}
-            mpich=${{ inputs.mpich_version }}
-            NCPUS=${{ env.BUILD_NCPUS }}
-          labels: |
-            com.github.sha=${{ github.sha }}
-            com.github.workflow=${{ github.workflow }}
-            com.github.run_id=${{ github.run_id }}
-            com.github.run_number=${{ github.run_number }}
-            com.github.repository=${{ github.repository }}
-            com.github.ref_name=${{ github.ref_name }}
-          tags: ${{ steps.build_info.outputs.tags }}
-          push: true
-          cache-from: type=gha,scope=sst-custom-${{ needs.validate-inputs.outputs.build_type }}-${{ steps.platform.outputs.arch }}
-          cache-to: type=gha,mode=max,scope=sst-custom-${{ needs.validate-inputs.outputs.build_type }}-${{ steps.platform.outputs.arch }}
-
-  validate-containers:
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [validate-inputs, build-custom-containers]
+  validate-custom-containers:
     permissions:
       contents: read
       packages: read
-    strategy:
-      matrix:
-        platform: ${{ fromJson(needs.validate-inputs.outputs.platforms) }}
-    steps:
-      - name: Extract architecture
-        id: arch
-        run: |
-          PLATFORM="${{ matrix.platform }}"
-          ARCH="${PLATFORM##*/}"
-          echo "arch=$ARCH" >> $GITHUB_OUTPUT
-
-      - name: Validate container
-        run: |
-          BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
-          TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
-          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${{ steps.arch.outputs.arch }}:${TAG_SUFFIX}"
-
-          echo "Validating container: $IMAGE_NAME"
-
-          # Pull and run basic validation
-          docker pull "$IMAGE_NAME"
-
-          # Test SST installation
-          echo "sst --version" | docker run --rm -i "$IMAGE_NAME"
-          echo "sst-info --version" | docker run --rm -i "$IMAGE_NAME"
-
-          # Get image size
-          IMAGE_SIZE=$(docker image inspect "$IMAGE_NAME" --format='{{.Size}}')
-          IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))
-
-          echo "Container validation successful!"
-          echo "Image: $IMAGE_NAME"
-          echo "Size: ${IMAGE_SIZE_MB} MB"
-          echo "Platform: ${{ matrix.platform }}"
-          echo "Type: SST-${BUILD_TYPE}"
-
-  create-manifest-lists:
-    runs-on: ubuntu-latest
-    needs: [validate-inputs, build-custom-containers]
+    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    needs: [build-custom-containers]
     if: needs.build-custom-containers.result == 'success'
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+    with:
+      container_type: '${{ needs.validate-inputs.outputs.build_type }}'
+      image_tags: '${{ needs.build-custom-containers.outputs.built_images }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      max_image_size_mb: 2048
+    secrets: inherit
 
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create multi-architecture manifest lists
-        run: |
-          BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
-          TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
-
-          # Determine which platforms were built
-          PLATFORMS="${{ inputs.build_platforms }}"
-          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
-
-          echo "Creating manifest lists for platforms: ${PLATFORMS}"
-          echo "Build type: ${BUILD_TYPE}"
-          echo "Tag suffix: ${TAG_SUFFIX}"
-
-          # Collect architecture-specific images
-          MANIFESTS=""
-          for platform in "${PLATFORM_ARRAY[@]}"; do
-            ARCH="${platform#linux/}"
-            MANIFESTS="$MANIFESTS ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${ARCH}:${TAG_SUFFIX}"
-          done
-
-          # Create multi-arch manifest using buildx imagetools (cleaner, no untagged images)
-          MANIFEST_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}:${TAG_SUFFIX}"
-          echo "Creating manifest: ${MANIFEST_NAME}"
-          docker buildx imagetools create \
-            --tag ${MANIFEST_NAME} \
-            $MANIFESTS
-
-          echo "[SUCCESS] Custom SST manifest list created successfully"
-          echo "Users can now pull: ${MANIFEST_NAME}"
-
-  summary:
-    runs-on: ubuntu-latest
-    needs: [validate-inputs, build-custom-containers, validate-containers, create-manifest-lists]
+  generate-summary:
+    uses: ./.github/workflows/generate-build-summary-reusable.yml
+    needs: [validate-inputs, build-custom-containers, validate-custom-containers]
     if: always()
-    permissions:
-      contents: read
-    steps:
-      - name: Build Summary
-        run: |
-          echo "# Custom SST Container Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Type:** ${{ needs.validate-inputs.outputs.build_type }}" >> $GITHUB_STEP_SUMMARY
-          echo "**SST-Core Repository:** ${{ inputs.sst_core_repo }}" >> $GITHUB_STEP_SUMMARY
-          echo "**SST-Core Ref:** ${{ inputs.sst_core_ref }}" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.validate-inputs.outputs.build_type }}" = "full" ]; then
-            echo "**SST-Elements Repository:** ${{ inputs.sst_elements_repo }}" >> $GITHUB_STEP_SUMMARY
-            echo "**SST-Elements Ref:** ${{ inputs.sst_elements_ref }}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "**MPICH Version:** ${{ inputs.mpich_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Platforms:** ${{ inputs.build_platforms }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Tag Suffix:** ${{ needs.validate-inputs.outputs.tag_suffix }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "## Build Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.build-custom-containers.result }}" == "success" ]; then
-            echo "**Build Status:** Success" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Built Containers" >> $GITHUB_STEP_SUMMARY
-
-            BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
-            TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
-
-            # Parse platforms and list each built container
-            PLATFORMS="${{ inputs.build_platforms }}"
-            for PLATFORM in ${PLATFORMS//,/ }; do
-              ARCH="${PLATFORM##*/}"
-              echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${ARCH}:${TAG_SUFFIX}\`" >> $GITHUB_STEP_SUMMARY
-            done
-          else
-            echo "**Build Status:** Failed" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Usage" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Pull and use the container:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-
-          BUILD_TYPE="${{ needs.validate-inputs.outputs.build_type }}"
-          TAG_SUFFIX="${{ needs.validate-inputs.outputs.tag_suffix }}"
-
-          # Get first platform for usage example
-          PLATFORMS="${{ inputs.build_platforms }}"
-          FIRST_PLATFORM="${PLATFORMS%%,*}"
-          FIRST_ARCH="${FIRST_PLATFORM##*/}"
-
-          echo "# Pull the container (${FIRST_ARCH})" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${FIRST_ARCH}:${TAG_SUFFIX}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# Run the container" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -it ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${BUILD_TYPE}-${FIRST_ARCH}:${TAG_SUFFIX}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Container Details" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Core Ref:** \`${{ inputs.sst_core_ref }}\` (short: \`${{ needs.validate-inputs.outputs.core_short_sha }}\`)" >> $GITHUB_STEP_SUMMARY
-
-          if [ -n "${{ needs.validate-inputs.outputs.elements_short_sha }}" ]; then
-            echo "- **Elements Ref:** \`${{ inputs.sst_elements_ref }}\` (short: \`${{ needs.validate-inputs.outputs.elements_short_sha }}\`)" >> $GITHUB_STEP_SUMMARY
-          fi
+    with:
+      workflow_type: 'custom'
+      container_type: '${{ needs.validate-inputs.outputs.build_type }}'
+      build_successful: ${{ needs.build-custom-containers.result == 'success' }}
+      manifest_successful: ${{ needs.build-custom-containers.result == 'success' }}
+      validation_successful: ${{ needs.validate-custom-containers.result == 'success' }}
+      manifest_tag: '${{ needs.build-custom-containers.outputs.manifest_tag }}'
+      built_images: '${{ needs.build-custom-containers.outputs.built_images }}'
+      build_platforms: '${{ inputs.build_platforms }}'
+      tag_suffix: '${{ needs.validate-inputs.outputs.tag_suffix }}'
+      mpich_version: '${{ inputs.mpich_version }}'
