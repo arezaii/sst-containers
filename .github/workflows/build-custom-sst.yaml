@@ -102,7 +102,7 @@ jobs:
       sst_elements_ref: '${{ inputs.sst_elements_ref }}'
       containerfile_path: 'Containerfiles/Containerfile.tag'
       docker_context: 'Containerfiles'
-      build_target: ${{ needs.validate-inputs.outputs.build_type == 'full' && 'sst-full' || 'sst-core' }}
+      build_target: ${{ needs.validate-inputs.outputs.build_type == 'full' && 'full-build' || 'core-build' }}
     secrets: inherit
 
   validate-custom-containers:
