@@ -86,7 +86,7 @@ jobs:
       experiment_name: '${{ inputs.experiment_name }}'
       base_image: '${{ inputs.base_image }}'
       containerfile_path: ${{ needs.validate-experiment.outputs.has_containerfile == 'true' && format('{0}/Containerfile', inputs.experiment_name) || 'Containerfiles/Containerfile.experiment' }}
-      docker_context: ${{ needs.validate-experiment.outputs.has_containerfile == 'true' && inputs.experiment_name || 'Containerfiles' }}
+      docker_context: '${{ inputs.experiment_name }}'
     secrets: inherit
 
   validate-experiment-containers:

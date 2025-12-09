@@ -1,0 +1,16 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Copy experiment files
+COPY . /experiments/
+
+# Set working directory
+WORKDIR /experiments
+
+# Make scripts executable
+RUN find /experiments -name "*.sh" -exec chmod +x {} \;
+
+# Add experiment directory to PATH
+ENV PATH="/experiments:${PATH}"
+
+CMD ["/bin/bash"]
