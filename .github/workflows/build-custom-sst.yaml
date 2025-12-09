@@ -34,8 +34,13 @@ on:
           - 'linux/amd64,linux/arm64'
           - 'linux/amd64'
           - 'linux/arm64'
-      custom_tag_suffix:
-        description: 'Optional tag suffix (default: short SHA of core ref)'
+      image_name:
+        description: 'Custom image name (without registry prefix)'
+        required: false
+        default: 'sst-devel'
+        type: string
+      image_tag:
+        description: 'Custom image tag (default: core branch/ref name)'
         required: false
         type: string
 
@@ -65,18 +70,15 @@ jobs:
             echo "build_type=core" >> $GITHUB_OUTPUT
           fi
 
-          # Determine tag suffix
-          if [ -n "${{ inputs.custom_tag_suffix }}" ]; then
-            echo "tag_suffix=${{ inputs.custom_tag_suffix }}" >> $GITHUB_OUTPUT
+          # Determine image tag
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            echo "tag_suffix=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
           else
-            # Get short SHA for tagging
-            CORE_SHA="${{ inputs.sst_core_ref }}"
-            CORE_SHORT_SHA=$(echo "$CORE_SHA" | cut -c1-7)
-
-            # Extract repo owner from core repo URL
-            REPO_URL="${{ inputs.sst_core_repo }}"
-            REPO_OWNER=$(echo "$REPO_URL" | sed -E 's/.*[:/]([^/]+)\/[^/]+\.git/\1/')
-            echo "tag_suffix=${REPO_OWNER}-${CORE_SHORT_SHA}" >> $GITHUB_OUTPUT
+            # Use core ref as default tag (branch name, tag name, or short SHA)
+            CORE_REF="${{ inputs.sst_core_ref }}"
+            # Clean up ref for use as tag (replace / with -)
+            TAG=$(echo "$CORE_REF" | sed 's/\//-/g' | cut -c1-50)
+            echo "tag_suffix=${TAG}" >> $GITHUB_OUTPUT
           fi
 
           echo "::notice::Build type: $(cat $GITHUB_OUTPUT | grep build_type | cut -d= -f2)"
@@ -90,7 +92,7 @@ jobs:
     uses: ./.github/workflows/build-sst-containers-reusable.yml
     with:
       container_type: '${{ needs.validate-inputs.outputs.build_type }}'
-      image_prefix: '${{ github.repository_owner }}/ar-sst'
+      image_prefix: '${{ github.repository_owner }}/${{ inputs.image_name }}'
       tag_suffix: '${{ needs.validate-inputs.outputs.tag_suffix }}'
       build_platforms: '${{ inputs.build_platforms }}'
       mpich_version: '${{ inputs.mpich_version }}'
