@@ -99,7 +99,7 @@ jobs:
       sst_core_ref: '${{ needs.check-updates.outputs.current_sha }}'
       containerfile_path: 'Containerfiles/Containerfile.tag'
       docker_context: 'Containerfiles'
-      build_target: 'sst-core'
+      build_target: 'core-build'
     secrets: inherit
 
 
