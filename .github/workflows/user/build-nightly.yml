@@ -1,4 +1,7 @@
-name: Nightly SST Container Build
+name: Nightly SST Core Container Build
+
+# Automatically builds SST-core containers from master branch when new commits are detected
+# Creates multi-architecture images with master-latest tags
 
 on:
   schedule:
@@ -28,7 +31,6 @@ on:
 env:
   REGISTRY: ghcr.io
   SST_REPO: https://github.com/sstsimulator/sst-core.git
-  SST_ELEMENTS_REPO: https://github.com/sstsimulator/sst-elements.git
   SST_BRANCH: master
 
 jobs:
@@ -62,10 +64,10 @@ jobs:
           # Check if multi-arch manifest with this tag exists
           CORE_IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-core"
           if docker manifest inspect "${CORE_IMAGE}:${TARGET_TAG}" >/dev/null 2>&1; then
-            echo "::notice::Multi-arch manifest with tag $TARGET_TAG already exists, skipping build"
+            echo "Multi-arch manifest with tag $TARGET_TAG already exists, skipping build"
             BUILD_NEEDED="false"
           else
-            echo "::notice::No multi-arch manifest found with tag $TARGET_TAG, build needed"
+            echo "No multi-arch manifest found with tag $TARGET_TAG, build needed"
             BUILD_NEEDED="true"
           fi
 
@@ -73,7 +75,7 @@ jobs:
           FORCE_REBUILD="${{ inputs.force_rebuild }}"
           if [ "$FORCE_REBUILD" = "true" ]; then
             BUILD_NEEDED="true"
-            echo "::notice::Build forced by force_rebuild=true parameter"
+            echo "Build forced by force_rebuild parameter"
           fi
 
           # Set outputs
@@ -88,7 +90,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/build-sst-containers-reusable.yml
+    uses: ./.github/workflows/reusable/build.yml
     with:
       container_type: 'core'
       image_prefix: '${{ github.repository_owner }}/ar-sst'
@@ -108,7 +110,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    uses: ./.github/workflows/reusable/validate.yml
     needs: [check-updates, build-core-containers]
     if: needs.build-core-containers.result == 'success'
     with:
@@ -152,7 +154,7 @@ jobs:
           echo "Created core additional tag: master-latest"
 
   generate-summary:
-    uses: ./.github/workflows/generate-build-summary-reusable.yml
+    uses: ./.github/workflows/reusable/summary.yml
     needs: [check-updates, build-core-containers, validate-core-containers, create-additional-tags]
     if: always()
     with:

@@ -1,5 +1,8 @@
 name: Build SST Development Container
 
+# Build development environment container with SST dependencies and development tools
+# Provides a ready-to-use environment for developing SST-core (does not include SST itself)
+
 on:
   workflow_dispatch:
     inputs:
@@ -38,7 +41,7 @@ env:
 
 jobs:
   build-dev-containers:
-    uses: ./.github/workflows/build-sst-containers-reusable.yml
+    uses: ./.github/workflows/reusable/build.yml
     permissions:
       contents: read
       packages: write
@@ -55,7 +58,7 @@ jobs:
     secrets: inherit
 
   validate-dev-containers:
-    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    uses: ./.github/workflows/reusable/validate.yml
     needs: [build-dev-containers]
     permissions:
       contents: read
@@ -68,7 +71,7 @@ jobs:
     secrets: inherit
 
   generate-summary:
-    uses: ./.github/workflows/generate-build-summary-reusable.yml
+    uses: ./.github/workflows/reusable/summary.yml
     needs: [build-dev-containers, validate-dev-containers]
     if: always()
     permissions:

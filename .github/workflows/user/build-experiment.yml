@@ -1,5 +1,8 @@
 name: Build Experiment Container
 
+# Build specialized containers for specific experiments
+# Supports custom base images and experiment-specific configurations
+
 on:
   workflow_dispatch:
     inputs:
@@ -74,7 +77,7 @@ jobs:
   build-experiment-containers:
     needs: [validate-experiment]
     if: needs.validate-experiment.outputs.experiment_exists == 'true'
-    uses: ./.github/workflows/build-sst-containers-reusable.yml
+    uses: ./.github/workflows/reusable/build.yml
     permissions:
       contents: read
       packages: write
@@ -93,7 +96,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    uses: ./.github/workflows/reusable/validate.yml
     needs: [build-experiment-containers]
     if: needs.build-experiment-containers.result == 'success'
     with:
@@ -104,7 +107,7 @@ jobs:
     secrets: inherit
 
   generate-summary:
-    uses: ./.github/workflows/generate-build-summary-reusable.yml
+    uses: ./.github/workflows/reusable/summary.yml
     needs: [validate-experiment, build-experiment-containers, validate-experiment-containers]
     if: always()
     with:

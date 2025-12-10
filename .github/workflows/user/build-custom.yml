@@ -1,4 +1,7 @@
-name: Build Custom SST Containers from Git
+name: Build Custom SST Containers
+
+# Build SST containers from any Git repository and branch/tag/commit
+# Supports both core-only and full (core+elements) builds
 
 on:
   workflow_dispatch:
@@ -81,15 +84,15 @@ jobs:
             echo "tag_suffix=${TAG}" >> $GITHUB_OUTPUT
           fi
 
-          echo "::notice::Build type: $(cat $GITHUB_OUTPUT | grep build_type | cut -d= -f2)"
-          echo "::notice::Tag suffix: $(cat $GITHUB_OUTPUT | grep tag_suffix | cut -d= -f2)"
+          echo "Build type: $(cat $GITHUB_OUTPUT | grep build_type | cut -d= -f2)"
+          echo "Tag suffix: $(cat $GITHUB_OUTPUT | grep tag_suffix | cut -d= -f2)"
 
   build-custom-containers:
     needs: [validate-inputs]
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/build-sst-containers-reusable.yml
+    uses: ./.github/workflows/reusable/build.yml
     with:
       container_type: '${{ needs.validate-inputs.outputs.build_type }}'
       image_prefix: '${{ github.repository_owner }}/${{ inputs.image_name }}'
@@ -109,7 +112,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    uses: ./.github/workflows/reusable/validate.yml
     needs: [build-custom-containers]
     if: needs.build-custom-containers.result == 'success'
     with:
@@ -120,7 +123,7 @@ jobs:
     secrets: inherit
 
   generate-summary:
-    uses: ./.github/workflows/generate-build-summary-reusable.yml
+    uses: ./.github/workflows/reusable/summary.yml
     needs: [validate-inputs, build-custom-containers, validate-custom-containers]
     if: always()
     with:
