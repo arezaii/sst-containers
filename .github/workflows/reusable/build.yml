@@ -160,15 +160,11 @@ jobs:
         if: inputs.mpich_version != ''
         working-directory: Containerfiles
         run: |
-          echo "Files available for ${{ inputs.container_type }} container build:"
-          ls -la *.tar.gz || echo "No .tar.gz files found"
-          echo "Expected MPICH file: mpich-${{ inputs.mpich_version }}.tar.gz"
-          if [ -f "mpich-${{ inputs.mpich_version }}.tar.gz" ]; then
-            echo "[OK] MPICH file exists"
-          else
-            echo "[ERROR] MPICH file missing"
+          if [ ! -f "mpich-${{ inputs.mpich_version }}.tar.gz" ]; then
+            echo "ERROR: MPICH file mpich-${{ inputs.mpich_version }}.tar.gz not found"
             exit 1
           fi
+          echo "MPICH source file validated"
 
       - name: Cache SST sources
         id: cache-sst
@@ -386,19 +382,16 @@ jobs:
           for platform in "${PLATFORM_ARRAY[@]}"; do
             ARCH="${platform#linux/}"
             TEMP_TAG="${MANIFEST_TAG}-${ARCH}"
-            echo "Checking: ${TEMP_TAG}"
             if docker manifest inspect "${TEMP_TAG}" >/dev/null 2>&1; then
               MANIFESTS="$MANIFESTS ${TEMP_TAG}"
-              echo "  [OK] Added: ${TEMP_TAG}"
             fi
           done
 
           if [ -n "$MANIFESTS" ]; then
             echo "Creating multi-arch manifest: ${MANIFEST_TAG}"
             docker buildx imagetools create --tag "${MANIFEST_TAG}" $MANIFESTS
-            echo "[SUCCESS] Created manifest: ${MANIFEST_TAG}"
             echo "manifest_tag=${MANIFEST_TAG}" >> $GITHUB_OUTPUT
           else
-            echo "[ERROR] No images found for manifest creation"
+            echo "ERROR: No images found for manifest creation"
             exit 1
           fi

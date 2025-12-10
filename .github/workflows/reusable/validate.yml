@@ -97,23 +97,12 @@ jobs:
           # Basic container validation (without running commands)
           echo "Inspecting container metadata..."
 
-          # Check that the container has expected labels
-          LABELS=$(docker image inspect "$IMAGE_TAG" --format='{{json .Config.Labels}}')
-          echo "Container labels: $LABELS"
-
-          # Verify the container can be instantiated (but don't run commands)
-          echo "Testing container instantiation..."
+          # Verify the container can be instantiated
           CONTAINER_ID=$(docker create --platform ${{ matrix.platform }} "$IMAGE_TAG" /bin/true)
           if [ -n "$CONTAINER_ID" ]; then
-            echo "[OK] Container can be instantiated"
             docker rm "$CONTAINER_ID" >/dev/null 2>&1
+            echo "Container validation successful: ${IMAGE_SIZE_MB} MB, ${{ matrix.platform }}"
           else
             echo "ERROR: Failed to instantiate container"
             exit 1
           fi
-
-          echo "Container validation successful!"
-          echo "[OK] Image: $IMAGE_TAG"
-          echo "[OK] Size: ${IMAGE_SIZE_MB} MB"
-          echo "[OK] Platform: ${{ matrix.platform }}"
-          echo "[OK] Type: ${{ inputs.container_type }}"
