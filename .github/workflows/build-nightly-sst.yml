@@ -166,5 +166,4 @@ jobs:
       build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
       tag_suffix: '${{ needs.check-updates.outputs.tag_suffix }}'
       mpich_version: ${{ inputs.mpich_version || '4.0.2' }}
-      sst_commit_sha: '${{ needs.check-updates.outputs.current_sha }}'
-      additional_info: 'Built from SST-core master branch. Tagged as master-{short-sha} and master-latest. Multi-arch manifest supports linux/amd64 and linux/arm64.'
+      sst_commit: '${{ needs.check-updates.outputs.current_sha }}'
