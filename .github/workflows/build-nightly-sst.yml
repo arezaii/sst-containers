@@ -1,0 +1,170 @@
+name: Nightly SST Container Build
+
+on:
+  schedule:
+    - cron: '0 10 * * *'  # Daily at 10AM UTC (2 AM Pacific Standard Time (PST), 3 AM Pacific Daylight Time (PDT))
+  workflow_dispatch:      # Manual trigger for testing
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild even if no updates detected'
+        required: false
+        default: false
+        type: boolean
+      mpich_version:
+        description: 'MPICH version to use'
+        required: false
+        default: '4.0.2'
+        type: string
+      build_platforms:
+        description: 'Platforms to build for'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: choice
+        options:
+          - 'linux/amd64,linux/arm64'
+          - 'linux/amd64'
+          - 'linux/arm64'
+
+env:
+  REGISTRY: ghcr.io
+  SST_REPO: https://github.com/sstsimulator/sst-core.git
+  SST_ELEMENTS_REPO: https://github.com/sstsimulator/sst-elements.git
+  SST_BRANCH: master
+
+jobs:
+  check-updates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      build_needed: ${{ steps.check.outputs.build_needed }}
+      current_sha: ${{ steps.check.outputs.current_sha }}
+      short_sha: ${{ steps.check.outputs.short_sha }}
+      tag_suffix: ${{ steps.check.outputs.tag_suffix }}
+    steps:
+      - name: Check for SST-core branch updates
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get current commit SHA from SST-core master branch
+          CURRENT_SHA=$(gh api /repos/sstsimulator/sst-core/branches/${{ env.SST_BRANCH }} --jq '.commit.sha')
+          SHORT_SHA=${CURRENT_SHA:0:7}
+
+          echo "Current SST-core ${{ env.SST_BRANCH }} SHA: $CURRENT_SHA"
+          echo "Short SHA: $SHORT_SHA"
+
+          # Create our tag as master-{short_sha}
+          TARGET_TAG="master-${SHORT_SHA}"
+          echo "Checking for existing tag: $TARGET_TAG"
+
+          # Check if multi-arch manifest with this tag exists
+          CORE_IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core"
+          if docker manifest inspect "${CORE_IMAGE}:${TARGET_TAG}" >/dev/null 2>&1; then
+            echo "::notice::Multi-arch manifest with tag $TARGET_TAG already exists, skipping build"
+            BUILD_NEEDED="false"
+          else
+            echo "::notice::No multi-arch manifest found with tag $TARGET_TAG, build needed"
+            BUILD_NEEDED="true"
+          fi
+
+          # Handle force_rebuild override (only if explicitly set)
+          FORCE_REBUILD="${{ inputs.force_rebuild }}"
+          if [ "$FORCE_REBUILD" = "true" ]; then
+            BUILD_NEEDED="true"
+            echo "::notice::Build forced by force_rebuild=true parameter"
+          fi
+
+          # Set outputs
+          echo "build_needed=$BUILD_NEEDED" >> $GITHUB_OUTPUT
+          echo "current_sha=$CURRENT_SHA" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "tag_suffix=master-${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+  build-core-containers:
+    needs: [check-updates]
+    if: needs.check-updates.outputs.build_needed == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-sst-containers-reusable.yml
+    with:
+      container_type: 'core'
+      image_prefix: '${{ github.repository_owner }}/sst'
+      tag_suffix: '${{ needs.check-updates.outputs.tag_suffix }}'
+      build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
+      mpich_version: ${{ inputs.mpich_version || '4.0.2' }}
+      sst_core_repo: 'https://github.com/sstsimulator/sst-core.git'
+      sst_core_ref: '${{ needs.check-updates.outputs.current_sha }}'
+      containerfile_path: 'Containerfiles/Containerfile.tag'
+      docker_context: 'Containerfiles'
+      build_target: 'sst-core'
+    secrets: inherit
+
+
+
+  validate-core-containers:
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/validate-sst-containers-reusable.yml
+    needs: [check-updates, build-core-containers]
+    if: needs.build-core-containers.result == 'success'
+    with:
+      container_type: 'core'
+      image_tags: '["ghcr.io/${{ github.repository_owner }}/sst-core:${{ needs.check-updates.outputs.tag_suffix }}"]'
+      build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
+      max_image_size_mb: 2048
+    secrets: inherit
+
+
+
+  create-additional-tags:
+    needs: [check-updates, build-core-containers]
+    if: needs.build-core-containers.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create master-latest tag
+        run: |
+          TAG_SUFFIX="${{ needs.check-updates.outputs.tag_suffix }}"
+          SOURCE_TAG="ghcr.io/${{ github.repository_owner }}/sst-core:${TAG_SUFFIX}"
+
+          echo "Creating master-latest tag for core container from: ${SOURCE_TAG}"
+
+          docker buildx imagetools create \
+            --tag "ghcr.io/${{ github.repository_owner }}/sst-core:master-latest" \
+            ${SOURCE_TAG}
+
+          echo "Created core additional tag: master-latest"
+
+  generate-summary:
+    uses: ./.github/workflows/generate-build-summary-reusable.yml
+    needs: [check-updates, build-core-containers, validate-core-containers, create-additional-tags]
+    if: always()
+    with:
+      workflow_type: 'nightly'
+      container_type: 'core'
+      build_successful: ${{ needs.build-core-containers.result == 'success' }}
+      manifest_successful: ${{ needs.build-core-containers.result == 'success' }}
+      validation_successful: ${{ needs.validate-core-containers.result == 'success' }}
+      manifest_tag: '${{ needs.check-updates.outputs.tag_suffix }}'
+      built_images: '["ghcr.io/${{ github.repository_owner }}/sst-core:${{ needs.check-updates.outputs.tag_suffix }}"]'
+      build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
+      tag_suffix: '${{ needs.check-updates.outputs.tag_suffix }}'
+      mpich_version: ${{ inputs.mpich_version || '4.0.2' }}
+      sst_commit_sha: '${{ needs.check-updates.outputs.current_sha }}'
+      additional_info: 'Built from SST-core master branch. Tagged as master-{short-sha} and master-latest. Multi-arch manifest supports linux/amd64 and linux/arm64.'
