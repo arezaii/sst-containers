@@ -58,7 +58,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/reusable-build.yml
+    uses: ./.github/workflows/_reusable-build-containers.yml
     with:
       container_type: 'core'
       image_prefix: '${{ github.repository_owner }}/ar-sst'
@@ -78,7 +78,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/reusable-build.yml
+    uses: ./.github/workflows/_reusable-build-containers.yml
     with:
       container_type: 'full'
       image_prefix: '${{ github.repository_owner }}/ar-sst'
