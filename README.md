@@ -15,7 +15,9 @@ Containerized SST (Structural Simulation Toolkit) environments with automated Gi
 ### User-Facing Workflows
 
 #### Build SST Release Containers
+
 **Workflow**: `build-release.yml`
+
 **Purpose**: Build official SST release versions
 
 **Required Parameters**:
@@ -32,6 +34,7 @@ Containerized SST (Structural Simulation Toolkit) environments with automated Gi
 
 #### Build SST Development Container
 **Workflow**: `build-dev.yml`
+
 **Purpose**: Build development environment with SST dependencies (no SST itself)
 
 **Optional Parameters**:
@@ -44,7 +47,9 @@ Containerized SST (Structural Simulation Toolkit) environments with automated Gi
 **Output**: `ghcr.io/{owner}/sst-dev:{tag_suffix}`
 
 #### Build Custom SST Containers
+
 **Workflow**: `build-custom.yml`
+
 **Purpose**: Build SST from any git repository, branch, tag, or commit
 
 **Required Parameters**:
@@ -62,7 +67,9 @@ Containerized SST (Structural Simulation Toolkit) environments with automated Gi
 **Output**: `ghcr.io/{owner}/{image_name}:{tag}`
 
 #### Build Experiment Container
+
 **Workflow**: `build-experiment.yml`
+
 **Purpose**: Package experiment scripts with base SST environment
 
 **Required Parameters**:
@@ -78,7 +85,9 @@ Containerized SST (Structural Simulation Toolkit) environments with automated Gi
 **Note**: Automatically resolves base images - use `ar-sst-core:latest` for images in this repo, or full paths like `ghcr.io/user/image:tag` for external images.
 
 #### Nightly SST Core Container Build
+
 **Workflow**: `build-nightly.yml`
+
 **Purpose**: Automated builds from SST master branch when new commits are detected
 
 **Optional Parameters**:
@@ -127,8 +136,8 @@ These internal workflows are automatically combined by the user-facing workflows
 
 - **Multi-architecture support**: Native builds for both `linux/amd64` and `linux/arm64` platforms
 - **Automatic platform detection**: Multi-architecture manifests allow `docker pull` to select the correct architecture
-- **Build validation**: Automated container testing and size verification
-- **Dependency caching**: Optimized build times through MPICH and dependency caching
+- **Build validation**: Automated container pulling and size verification
+- **Dependency caching**: Cache dependencies like MPICH for faster builds
 - **Consistent tagging**: Git-based tagging for reproducible builds
 - **Build metadata**: Comprehensive labels with build information, source URLs, and commit SHAs
 - **Standardized workflows**: Clean logging, error handling, and consistent patterns
@@ -154,7 +163,7 @@ Add a directory to this repository with your experiment files:
 my-experiment/
 ├── run_simulation.sh         # Your experiment script
 ├── README.md                 # Documentation
-├── Containerfile            # Optional: custom dependencies
+├── Containerfile            # Optional: custom Containerfile with all dependencies
 └── additional_files/        # Any other required files
 ```
 
@@ -175,4 +184,4 @@ All containers are published to GitHub Container Registry (GHCR):
 - **Experiment containers**: `ghcr.io/{owner}/{experiment-name}:{tag}`
 - **Nightly containers**: `ghcr.io/{owner}/ar-sst-core:master-{sha}`, `ghcr.io/{owner}/ar-sst-core:master-latest`
 
-All containers include comprehensive metadata accessible via `docker inspect`.
+All containers include metadata accessible via `docker inspect`.
