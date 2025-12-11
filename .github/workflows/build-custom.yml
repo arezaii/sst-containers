@@ -92,7 +92,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/reusable/build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       container_type: '${{ needs.validate-inputs.outputs.build_type }}'
       image_prefix: '${{ github.repository_owner }}/${{ inputs.image_name }}'
@@ -112,7 +112,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/reusable/validate.yml
+    uses: ./.github/workflows/reusable-validate.yml
     needs: [build-custom-containers]
     if: needs.build-custom-containers.result == 'success'
     with:
@@ -123,7 +123,7 @@ jobs:
     secrets: inherit
 
   generate-summary:
-    uses: ./.github/workflows/reusable/summary.yml
+    uses: ./.github/workflows/reusable-summary.yml
     needs: [validate-inputs, build-custom-containers, validate-custom-containers]
     if: always()
     with:

@@ -58,7 +58,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/reusable/build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       container_type: 'core'
       image_prefix: '${{ github.repository_owner }}/ar-sst'
@@ -78,7 +78,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/reusable/build.yml
+    uses: ./.github/workflows/reusable-build.yml
     with:
       container_type: 'full'
       image_prefix: '${{ github.repository_owner }}/ar-sst'
@@ -98,7 +98,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/reusable/validate.yml
+    uses: ./.github/workflows/reusable-validate.yml
     needs: [build-core-containers]
     with:
       container_type: 'core'
@@ -112,7 +112,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/reusable/validate.yml
+    uses: ./.github/workflows/reusable-validate.yml
     needs: [build-full-containers]
     with:
       container_type: 'full'
@@ -122,7 +122,7 @@ jobs:
     secrets: inherit
 
   generate-summary:
-    uses: ./.github/workflows/reusable/summary.yml
+    uses: ./.github/workflows/reusable-summary.yml
     needs: [build-core-containers, build-full-containers, validate-core-containers, validate-full-containers]
     if: always()
     with:
