@@ -90,7 +90,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/reusable-build.yml
+    uses: ./.github/workflows/_reusable-build-containers.yml
     with:
       container_type: 'core'
       image_prefix: '${{ github.repository_owner }}/ar-sst'
@@ -110,7 +110,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/reusable-validate.yml
+    uses: ./.github/workflows/_reusable-validate-containers.yml
     needs: [check-updates, build-core-containers]
     if: needs.build-core-containers.result == 'success'
     with:
@@ -154,7 +154,7 @@ jobs:
           echo "Created core additional tag: master-latest"
 
   generate-summary:
-    uses: ./.github/workflows/reusable-summary.yml
+    uses: ./.github/workflows/_reusable-generate-summary.yml
     needs: [check-updates, build-core-containers, validate-core-containers, create-additional-tags]
     if: always()
     with:

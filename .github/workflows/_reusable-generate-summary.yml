@@ -1,4 +1,4 @@
-name: Generate Build Summary (for use by other workflows)
+name: _Reusable Generate Summary (internal use only)
 
 on:
   workflow_call:

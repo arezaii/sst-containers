@@ -1,4 +1,4 @@
-name: Validate SST Containers (for use by other workflows)
+name: _Reusable Validate Containers (internal use only)
 
 on:
   workflow_call:

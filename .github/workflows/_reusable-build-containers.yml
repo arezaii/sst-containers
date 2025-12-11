@@ -1,4 +1,4 @@
-name: Build SST Containers (for use by other workflows)
+name: _Reusable Build Containers (internal use only)
 
 on:
   workflow_call:

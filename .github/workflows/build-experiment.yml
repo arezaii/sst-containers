@@ -77,7 +77,7 @@ jobs:
   build-experiment-containers:
     needs: [validate-experiment]
     if: needs.validate-experiment.outputs.experiment_exists == 'true'
-    uses: ./.github/workflows/reusable-build.yml
+    uses: ./.github/workflows/_reusable-build-containers.yml
     permissions:
       contents: read
       packages: write
@@ -96,7 +96,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    uses: ./.github/workflows/reusable-validate.yml
+    uses: ./.github/workflows/_reusable-validate-containers.yml
     needs: [build-experiment-containers]
     if: needs.build-experiment-containers.result == 'success'
     with:
@@ -107,7 +107,7 @@ jobs:
     secrets: inherit
 
   generate-summary:
-    uses: ./.github/workflows/reusable-summary.yml
+    uses: ./.github/workflows/_reusable-generate-summary.yml
     needs: [validate-experiment, build-experiment-containers, validate-experiment-containers]
     if: always()
     with:
