@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       base_image:
-        description: 'Base image (only used if experiment has no custom Containerfile). Examples: sst-core:latest, sst-full:15.1.0, myuser/custom-sst:v2.0'
+        description: 'Base image (only used if experiment has no custom Containerfile). Examples: sst-core:latest, sst-full:15.1.0. Full registry paths also supported: ghcr.io/user/image:tag'
         required: false
         default: 'sst-core:latest'
         type: string
@@ -42,6 +42,7 @@ jobs:
       experiment_exists: ${{ steps.check.outputs.experiment_exists }}
       has_containerfile: ${{ steps.check.outputs.has_containerfile }}
       files_count: ${{ steps.check.outputs.files_count }}
+      resolved_base_image: ${{ steps.check.outputs.resolved_base_image }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -62,17 +63,36 @@ jobs:
 
           # Check if experiment has its own Containerfile
           if [ -f "$EXPERIMENT/Containerfile" ]; then
-            echo "Found custom Containerfile in $EXPERIMENT/"
             echo "has_containerfile=true" >> $GITHUB_OUTPUT
+            echo "resolved_base_image=" >> $GITHUB_OUTPUT
           else
-            echo "No custom Containerfile found, will use base image: ${{ inputs.base_image }}"
             echo "has_containerfile=false" >> $GITHUB_OUTPUT
+
+            # Resolve base image path - add GHCR registry if not specified
+            BASE_IMAGE="${{ inputs.base_image }}"
+            if [[ "$BASE_IMAGE" == *"/"* ]]; then
+              # Image already contains registry/namespace
+              RESOLVED_IMAGE="$BASE_IMAGE"
+            else
+              # Default to current repo owner's GHCR
+              RESOLVED_IMAGE="ghcr.io/${{ github.repository_owner }}/$BASE_IMAGE"
+            fi
+
+            # Verify the base image exists and is accessible
+            echo "resolved_base_image=$RESOLVED_IMAGE" >> $GITHUB_OUTPUT
+            if docker manifest inspect "$RESOLVED_IMAGE" >/dev/null 2>&1; then
+              echo "Base image accessible"
+            else
+              echo "Base image not found: $RESOLVED_IMAGE"
+              echo "For images in this repository, use format: sst-core:latest"
+              echo "For external images, use full path: ghcr.io/username/image:tag"
+              exit 1
+            fi
           fi
 
           # Count files in experiment directory
           FILES_COUNT=$(find "$EXPERIMENT" -type f | wc -l)
           echo "files_count=$FILES_COUNT" >> $GITHUB_OUTPUT
-          echo "Found $FILES_COUNT files in experiment directory"
 
   build-experiment-containers:
     needs: [validate-experiment]
@@ -87,7 +107,7 @@ jobs:
       tag_suffix: '${{ inputs.tag_suffix }}'
       build_platforms: '${{ inputs.build_platforms }}'
       experiment_name: '${{ inputs.experiment_name }}'
-      base_image: '${{ inputs.base_image }}'
+      base_image: '${{ needs.validate-experiment.outputs.resolved_base_image || inputs.base_image }}'
       containerfile_path: ${{ needs.validate-experiment.outputs.has_containerfile == 'true' && format('{0}/Containerfile', inputs.experiment_name) || 'Containerfiles/Containerfile.experiment' }}
       docker_context: '${{ inputs.experiment_name }}'
     secrets: inherit
