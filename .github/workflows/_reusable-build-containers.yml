@@ -99,6 +99,12 @@ on:
         default: false
         type: boolean
 
+      enable_perf_tracking:
+        description: 'Enable SST performance tracking'
+        required: false
+        default: false
+        type: boolean
+
     outputs:
       built_images:
         description: 'JSON array of built image tags'
@@ -128,9 +134,39 @@ jobs:
           PLATFORMS="${{ inputs.build_platforms }}"
           echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
 
+  prepare-image-config:
+    runs-on: ubuntu-latest
+    outputs:
+      image_prefix: ${{ steps.config.outputs.image_prefix }}
+      core_full_pattern: ${{ steps.config.outputs.core_full_pattern }}
+      dev_custom_pattern: ${{ steps.config.outputs.dev_custom_pattern }}
+      experiment_pattern: ${{ steps.config.outputs.experiment_pattern }}
+      default_pattern: ${{ steps.config.outputs.default_pattern }}
+    steps:
+      - name: Configure image naming
+        id: config
+        run: |
+          # Build image name components based on inputs
+          IMAGE_PREFIX="${{ inputs.image_prefix }}"
+          if [ "${{ inputs.enable_perf_tracking }}" = "true" ] && [[ "${{ inputs.container_type }}" =~ ^(core|full|custom)$ ]]; then
+            IMAGE_PREFIX="${IMAGE_PREFIX}-perf-track"
+          fi
+
+          # Define tag patterns for different container types
+          CORE_FULL_PATTERN="${{ env.REGISTRY }}/${IMAGE_PREFIX}-${{ inputs.container_type }}:${{ inputs.tag_suffix }}"
+          DEV_CUSTOM_PATTERN="${{ env.REGISTRY }}/${IMAGE_PREFIX}:${{ inputs.tag_suffix }}"
+          EXPERIMENT_PATTERN="${{ env.REGISTRY }}/${{ inputs.image_prefix }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}"
+          DEFAULT_PATTERN="${{ env.REGISTRY }}/${IMAGE_PREFIX}:${{ inputs.tag_suffix }}"
+
+          echo "image_prefix=${IMAGE_PREFIX}" >> $GITHUB_OUTPUT
+          echo "core_full_pattern=${CORE_FULL_PATTERN}" >> $GITHUB_OUTPUT
+          echo "dev_custom_pattern=${DEV_CUSTOM_PATTERN}" >> $GITHUB_OUTPUT
+          echo "experiment_pattern=${EXPERIMENT_PATTERN}" >> $GITHUB_OUTPUT
+          echo "default_pattern=${DEFAULT_PATTERN}" >> $GITHUB_OUTPUT
+
   build-containers:
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [prepare-platforms]
+    needs: [prepare-platforms, prepare-image-config]
     permissions:
       contents: read
       packages: write
@@ -166,23 +202,71 @@ jobs:
           fi
           echo "MPICH source file validated"
 
-      - name: Cache SST sources
-        id: cache-sst
+      - name: Determine SST cache key and paths
+        id: sst-cache-config
         if: inputs.sst_version != ''
+        run: |
+          # Determine if we need elements based on build target or elements repo input
+          if [[ "${{ inputs.build_target }}" == "sst-full" ]] || [[ "${{ inputs.container_type }}" == "full" ]] || [[ -n "${{ inputs.sst_elements_repo }}" ]]; then
+            echo "needs_elements=true" >> $GITHUB_OUTPUT
+            echo "cache_key=sst-sources-full-${{ inputs.sst_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "needs_elements=false" >> $GITHUB_OUTPUT
+            echo "cache_key=sst-sources-core-${{ inputs.sst_version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cache SST sources (core-only)
+        id: cache-sst-core
+        if: inputs.sst_version != '' && steps.sst-cache-config.outputs.needs_elements == 'false'
+        uses: actions/cache@v3
+        with:
+          path: Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
+          key: ${{ steps.sst-cache-config.outputs.cache_key }}
+
+      - name: Cache SST sources (full)
+        id: cache-sst-full
+        if: inputs.sst_version != '' && steps.sst-cache-config.outputs.needs_elements == 'true'
         uses: actions/cache@v3
         with:
           path: |
             Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
             Containerfiles/sstelements-${{ inputs.sst_version }}.tar.gz
-          key: sst-sources-${{ inputs.sst_version }}
+          key: ${{ steps.sst-cache-config.outputs.cache_key }}
 
       - name: Download SST sources
-        if: inputs.sst_version != '' && steps.cache-sst.outputs.cache-hit != 'true'
+        if: inputs.sst_version != '' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
         working-directory: Containerfiles
         run: |
           echo "Downloading SST ${{ inputs.sst_version }} sources..."
+
+          # Always download SST-core
           wget https://github.com/sstsimulator/sst-core/releases/download/v${{ inputs.sst_version }}_Final/sstcore-${{ inputs.sst_version }}.tar.gz --no-check-certificate
-          wget https://github.com/sstsimulator/sst-elements/releases/download/v${{ inputs.sst_version }}_Final/sstelements-${{ inputs.sst_version }}.tar.gz --no-check-certificate
+
+          # Only download elements if building full version or elements are explicitly needed
+          if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
+            echo "Downloading SST-elements sources..."
+            wget https://github.com/sstsimulator/sst-elements/releases/download/v${{ inputs.sst_version }}_Final/sstelements-${{ inputs.sst_version }}.tar.gz --no-check-certificate
+          else
+            echo "Skipping SST-elements download for core-only build"
+          fi
+
+      - name: Validate SST sources
+        if: inputs.sst_version != ''
+        working-directory: Containerfiles
+        run: |
+          # Check core sources always exist
+          if [ ! -f "sstcore-${{ inputs.sst_version }}.tar.gz" ]; then
+            echo "ERROR: SST-core source file sstcore-${{ inputs.sst_version }}.tar.gz not found"
+            exit 1
+          fi
+
+          # Check elements sources exist when needed
+          if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
+            if [ ! -f "sstelements-${{ inputs.sst_version }}.tar.gz" ]; then
+              echo "ERROR: SST-elements source file sstelements-${{ inputs.sst_version }}.tar.gz not found but required for build target '${{ inputs.build_target }}'"
+              exit 1
+            fi
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -207,19 +291,19 @@ jobs:
         run: |
           ARCH="${{ steps.platform.outputs.arch }}"
 
-          # Simple tag generation based on container type
+          # Use pre-computed patterns based on container type
           case "${{ inputs.container_type }}" in
             "core"|"full")
-              TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}-${{ inputs.container_type }}:${{ inputs.tag_suffix }}-${ARCH}"
+              TEMP_TAG="${{ needs.prepare-image-config.outputs.core_full_pattern }}-${ARCH}"
               ;;
-            "dev")
-              TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}-${ARCH}"
+            "dev"|"custom")
+              TEMP_TAG="${{ needs.prepare-image-config.outputs.dev_custom_pattern }}-${ARCH}"
               ;;
             "experiment")
-              TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}-${ARCH}"
+              TEMP_TAG="${{ needs.prepare-image-config.outputs.experiment_pattern }}-${ARCH}"
               ;;
             *)
-              TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}-${ARCH}"
+              TEMP_TAG="${{ needs.prepare-image-config.outputs.default_pattern }}-${ARCH}"
               ;;
           esac
 
@@ -241,6 +325,7 @@ jobs:
             ${{ inputs.sst_elements_repo && format('SSTElementsRepo={0}', inputs.sst_elements_repo) || '' }}
             ${{ inputs.sst_elements_ref && format('elementsTag={0}', inputs.sst_elements_ref) || '' }}
             ${{ inputs.base_image && format('BASE_IMAGE={0}', inputs.base_image) || '' }}
+            ${{ inputs.enable_perf_tracking && 'ENABLE_PERF_TRACKING=1' || '' }}
             NCPUS=${{ env.BUILD_NCPUS }}
           labels: |
             com.github.sha=${{ github.sha }}
@@ -250,6 +335,7 @@ jobs:
             com.github.repository=${{ github.repository }}
             com.github.ref_name=${{ github.ref_name }}
             com.container.type=${{ inputs.container_type }}
+            sst.perf_tracking=${{ inputs.enable_perf_tracking }}
           tags: ${{ steps.tags.outputs.temp_tag }}
           push: true
           cache-from: type=gha,scope=${{ inputs.container_type }}-${{ inputs.tag_suffix }}-${{ steps.platform.outputs.arch }}
@@ -269,24 +355,36 @@ jobs:
 
       - name: Check if SST sources artifact exists
         id: check-sst-artifact
-        if: inputs.sst_version != '' && steps.cache-sst.outputs.cache-hit != 'true'
+        if: inputs.sst_version != '' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
         run: |
+          # Use build-type specific artifact name
+          ARTIFACT_NAME="sst-sources-${{ steps.sst-cache-config.outputs.needs_elements == 'true' && 'full' || 'core' }}-${{ inputs.sst_version }}"
+          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+
           # Check if artifact already exists from another job
-          if gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --paginate | jq -r '.artifacts[].name' | grep -q "^sst-sources-${{ inputs.sst_version }}$"; then
+          if gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --paginate | jq -r '.artifacts[].name' | grep -q "^${ARTIFACT_NAME}$"; then
             echo "artifact_exists=true" >> $GITHUB_OUTPUT
-            echo "SST sources artifact already exists, skipping upload"
+            echo "SST sources artifact ${ARTIFACT_NAME} already exists, skipping upload"
           else
             echo "artifact_exists=false" >> $GITHUB_OUTPUT
-            echo "SST sources artifact does not exist, will upload"
+            echo "SST sources artifact ${ARTIFACT_NAME} does not exist, will upload"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload SST sources artifact
+      - name: Upload SST sources artifact (core-only)
         uses: actions/upload-artifact@v4
-        if: inputs.sst_version != '' && steps.cache-sst.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true'
+        if: inputs.sst_version != '' && steps.cache-sst-core.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true' && steps.sst-cache-config.outputs.needs_elements == 'false'
         with:
-          name: sst-sources-${{ inputs.sst_version }}
+          name: ${{ steps.check-sst-artifact.outputs.artifact_name }}
+          path: Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
+          retention-days: 10
+
+      - name: Upload SST sources artifact (full)
+        uses: actions/upload-artifact@v4
+        if: inputs.sst_version != '' && steps.cache-sst-full.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true' && steps.sst-cache-config.outputs.needs_elements == 'true'
+        with:
+          name: ${{ steps.check-sst-artifact.outputs.artifact_name }}
           path: |
             Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
             Containerfiles/sstelements-${{ inputs.sst_version }}.tar.gz
@@ -294,7 +392,7 @@ jobs:
 
   collect-images:
     runs-on: ubuntu-latest
-    needs: [build-containers]
+    needs: [build-containers, prepare-image-config]
     if: needs.build-containers.result == 'success'
     outputs:
       built_images: ${{ steps.collect-all.outputs.built_images }}
@@ -304,7 +402,7 @@ jobs:
         run: |
           PLATFORMS="${{ inputs.build_platforms }}"
 
-          # Build JSON array of all architecture-specific images
+          # Build JSON array of all architecture-specific images using pre-computed patterns
           IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
           IMAGES="[]"
 
@@ -313,16 +411,16 @@ jobs:
 
             case "${{ inputs.container_type }}" in
               "core"|"full")
-                TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}-${{ inputs.container_type }}:${{ inputs.tag_suffix }}-${ARCH}"
+                TEMP_TAG="${{ needs.prepare-image-config.outputs.core_full_pattern }}-${ARCH}"
                 ;;
-              "dev")
-                TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}-${ARCH}"
+              "dev"|"custom")
+                TEMP_TAG="${{ needs.prepare-image-config.outputs.dev_custom_pattern }}-${ARCH}"
                 ;;
               "experiment")
-                TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}-${ARCH}"
+                TEMP_TAG="${{ needs.prepare-image-config.outputs.experiment_pattern }}-${ARCH}"
                 ;;
               *)
-                TEMP_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}-${ARCH}"
+                TEMP_TAG="${{ needs.prepare-image-config.outputs.default_pattern }}-${ARCH}"
                 ;;
             esac
 
@@ -334,7 +432,7 @@ jobs:
 
   create-manifest:
     runs-on: ubuntu-latest
-    needs: [collect-images]
+    needs: [collect-images, prepare-image-config]
     if: needs.collect-images.result == 'success'
     permissions:
       contents: read
@@ -357,19 +455,19 @@ jobs:
         run: |
           PLATFORMS="${{ inputs.build_platforms }}"
 
-          # Determine final manifest tag based on container type
+          # Use pre-computed patterns based on container type
           case "${{ inputs.container_type }}" in
             "core"|"full")
-              MANIFEST_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}-${{ inputs.container_type }}:${{ inputs.tag_suffix }}"
+              MANIFEST_TAG="${{ needs.prepare-image-config.outputs.core_full_pattern }}"
               ;;
-            "dev")
-              MANIFEST_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}"
+            "dev"|"custom")
+              MANIFEST_TAG="${{ needs.prepare-image-config.outputs.dev_custom_pattern }}"
               ;;
             "experiment")
-              MANIFEST_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}"
+              MANIFEST_TAG="${{ needs.prepare-image-config.outputs.experiment_pattern }}"
               ;;
             *)
-              MANIFEST_TAG="${{ env.REGISTRY }}/${{ inputs.image_prefix }}:${{ inputs.tag_suffix }}"
+              MANIFEST_TAG="${{ needs.prepare-image-config.outputs.default_pattern }}"
               ;;
           esac
 

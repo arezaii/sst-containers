@@ -4,6 +4,7 @@
 #   SSTver: SST version to build (default: 15.0.0, valid: 14.0.0, 14.1.0, 15.0.0)
 #   mpich:  MPICH version  (default: 4.0.2)
 #   NCPUS:  Parallel make jobs (default: 2)
+#   ENABLE_PERF_TRACKING: Enable performance tracking in SST-core (causes performance hit)
 #
 # STAGES DEFINED:
 #   base       - installs OS + build dependencies + compiles MPICH
@@ -41,6 +42,7 @@ ARG SSTver=15.0.0
 ARG mpich=4.0.2
 ARG mpich_prefix=mpich-$mpich
 ARG NCPUS=2
+ARG ENABLE_PERF_TRACKING=
 
 WORKDIR /tmp
 
@@ -95,7 +97,12 @@ RUN if [ -z "$NCPUS" ]; then \
         export NCPUS=$(($(nproc) / 2)); \
         if [ "$NCPUS" -lt 1 ]; then export NCPUS=1; fi; \
     fi && \
-    ./configure --prefix=/opt/SST/${SSTver} && \
+    CONFIGURE_FLAGS="--prefix=/opt/SST/${SSTver}"; \
+    if [ -n "${ENABLE_PERF_TRACKING}" ]; then \
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-perf-tracking"; \
+        echo "[INFO] Enabling SST performance tracking (will impact performance)"; \
+    fi && \
+    ./configure $CONFIGURE_FLAGS && \
     make -j$NCPUS all && \
     make install && \
     make clean && \
@@ -133,12 +140,21 @@ FROM ubuntu:22.04 AS runtime
 # Install only runtime dependencies (requires internet connection)
 RUN apt update && apt -y install \
     git \
+    locales \
     python3 \
     python3-pip \
     libfabric1 \
     zlib1g \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Configure UTF-8 locale for unicode character support
+RUN locale-gen en_US.UTF-8 \
+    && update-locale LANG=en_US.UTF-8 \
+    && update-locale LC_ALL=en_US.UTF-8
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 # Copy MPICH runtime libraries
 COPY --from=base /usr/local/lib/libmpi* /usr/local/lib/

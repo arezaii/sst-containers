@@ -44,6 +44,7 @@ RUN apt update && apt install -y \
     libtool \
     libtool-bin \
     libfabric-dev \
+    locales \
     graphviz \
     libgraphviz-dev \
     valgrind \
@@ -67,6 +68,14 @@ cd ..                                                                   && \
 rm -rf $mpich_prefix $mpich_prefix.tar.gz
 
 RUN /sbin/ldconfig
+
+# Configure UTF-8 locale for unicode character support
+RUN locale-gen en_US.UTF-8 \
+    && update-locale LANG=en_US.UTF-8 \
+    && update-locale LC_ALL=en_US.UTF-8
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 # Set up workspace - SST will be built here during development
 WORKDIR /workspace

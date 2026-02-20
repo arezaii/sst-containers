@@ -7,6 +7,7 @@
 #   elementsTag: SST-elements tag/sha to build from (optional)
 #   mpich:  MPICH version  (default: 4.0.2)
 #   NCPUS:  Parallel make jobs (default: 2)
+#   ENABLE_PERF_TRACKING: Enable performance tracking in SST-core (causes performance hit)
 #
 # STAGES DEFINED:
 #   base       - installs OS + build dependencies + compiles MPICH
@@ -42,6 +43,7 @@ FROM ubuntu:22.04 AS base
 ARG mpich=4.0.2
 ARG mpich_prefix=mpich-$mpich
 ARG NCPUS=2
+ARG ENABLE_PERF_TRACKING=
 
 WORKDIR /tmp
 
@@ -52,6 +54,7 @@ RUN apt update && apt install -y \
     automake \
     git \
     gfortran \
+    locales \
     python3 \
     python3-dev \
     python3-pip \
@@ -61,6 +64,14 @@ RUN apt update && apt install -y \
     zlib1g-dev \
     wget \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Configure UTF-8 locale for unicode character support
+RUN locale-gen en_US.UTF-8 \
+    && update-locale LANG=en_US.UTF-8 \
+    && update-locale LC_ALL=en_US.UTF-8
+
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 # Copy MPICH source
 COPY ${mpich_prefix}.tar.gz /tmp/
@@ -85,6 +96,7 @@ ARG tag
 ARG SSTElementsRepo
 ARG elementsTag
 ARG NCPUS=2
+ARG ENABLE_PERF_TRACKING
 
 RUN mkdir -p /opt/SST/dev/
 
@@ -100,7 +112,12 @@ RUN if [ -z "$NCPUS" ]; then \
     ./autogen.sh && \
     mkdir ../build && \
     cd ../build && \
-    /workspace/sst-core/configure --prefix=/opt/SST/dev && \
+    CONFIGURE_FLAGS="--prefix=/opt/SST/dev"; \
+    if [ -n "${ENABLE_PERF_TRACKING}" ]; then \
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-perf-tracking"; \
+        echo "[INFO] Enabling SST performance tracking (will impact performance)"; \
+    fi && \
+    /workspace/sst-core/configure $CONFIGURE_FLAGS && \
     make -j$NCPUS all && \
     make install && \
     cd /workspace && \
@@ -135,6 +152,7 @@ RUN mkdir -p /opt/SST/dev/
 ARG SSTrepo
 ARG tag
 ARG NCPUS=2
+ARG ENABLE_PERF_TRACKING
 
 # Download SST-core from repo and checkout tag
 WORKDIR /workspace
@@ -148,7 +166,12 @@ RUN if [ -z "$NCPUS" ]; then \
     ./autogen.sh && \
     mkdir ../build && \
     cd ../build && \
-    /workspace/sst-core/configure --prefix=/opt/SST/dev && \
+    CONFIGURE_FLAGS="--prefix=/opt/SST/dev"; \
+    if [ -n "${ENABLE_PERF_TRACKING}" ]; then \
+        CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-perf-tracking"; \
+        echo "[INFO] Enabling SST performance tracking (will impact performance)"; \
+    fi && \
+    /workspace/sst-core/configure $CONFIGURE_FLAGS && \
     make -j$NCPUS all && \
     make install && \
     cd /workspace && \

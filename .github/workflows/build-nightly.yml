@@ -62,7 +62,7 @@ jobs:
           echo "Checking for existing tag: $TARGET_TAG"
 
           # Check if multi-arch manifest with this tag exists
-          CORE_IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-core"
+          CORE_IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core"
           if docker manifest inspect "${CORE_IMAGE}:${TARGET_TAG}" >/dev/null 2>&1; then
             echo "Multi-arch manifest with tag $TARGET_TAG already exists, skipping build"
             BUILD_NEEDED="false"
@@ -93,7 +93,7 @@ jobs:
     uses: ./.github/workflows/_reusable-build-containers.yml
     with:
       container_type: 'core'
-      image_prefix: '${{ github.repository_owner }}/ar-sst'
+      image_prefix: '${{ github.repository_owner }}/sst'
       tag_suffix: '${{ needs.check-updates.outputs.tag_suffix }}'
       build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
       mpich_version: ${{ inputs.mpich_version || '4.0.2' }}
@@ -115,9 +115,9 @@ jobs:
     if: needs.build-core-containers.result == 'success'
     with:
       container_type: 'core'
-      image_tags: '["ghcr.io/${{ github.repository_owner }}/ar-sst-core:${{ needs.check-updates.outputs.tag_suffix }}-amd64", "ghcr.io/${{ github.repository_owner }}/ar-sst-core:${{ needs.check-updates.outputs.tag_suffix }}-arm64"]'
+      image_tags: '${{ needs.build-core-containers.outputs.built_images }}'
       build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
-      max_image_size_mb: 2048
+      max_image_size_mb: 4096
     secrets: inherit
 
 
@@ -143,12 +143,12 @@ jobs:
       - name: Create master-latest tag
         run: |
           TAG_SUFFIX="${{ needs.check-updates.outputs.tag_suffix }}"
-          SOURCE_TAG="ghcr.io/${{ github.repository_owner }}/ar-sst-core:${TAG_SUFFIX}"
+          SOURCE_TAG="ghcr.io/${{ github.repository_owner }}/sst-core:${TAG_SUFFIX}"
 
           echo "Creating master-latest tag for core container from: ${SOURCE_TAG}"
 
           docker buildx imagetools create \
-            --tag "ghcr.io/${{ github.repository_owner }}/ar-sst-core:master-latest" \
+            --tag "ghcr.io/${{ github.repository_owner }}/sst-core:master-latest" \
             ${SOURCE_TAG}
 
           echo "Created core additional tag: master-latest"
@@ -163,8 +163,8 @@ jobs:
       build_successful: ${{ needs.build-core-containers.result == 'success' || (needs.check-updates.outputs.build_needed == 'false' && needs.build-core-containers.result == 'skipped') }}
       manifest_successful: ${{ needs.build-core-containers.result == 'success' || (needs.check-updates.outputs.build_needed == 'false' && needs.build-core-containers.result == 'skipped') }}
       validation_successful: ${{ needs.validate-core-containers.result == 'success' || (needs.check-updates.outputs.build_needed == 'false' && needs.validate-core-containers.result == 'skipped') }}
-      manifest_tag: '${{ needs.check-updates.outputs.tag_suffix }}'
-      built_images: '["ghcr.io/${{ github.repository_owner }}/ar-sst-core:${{ needs.check-updates.outputs.tag_suffix }}"]'
+      manifest_tag: '${{ needs.build-core-containers.outputs.manifest_tag }}'
+      built_images: '${{ needs.build-core-containers.outputs.built_images }}'
       build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
       tag_suffix: '${{ needs.check-updates.outputs.tag_suffix }}'
       mpich_version: ${{ inputs.mpich_version || '4.0.2' }}

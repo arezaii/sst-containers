@@ -67,7 +67,7 @@ jobs:
       container_type: 'dev'
       image_tags: '${{ needs.build-dev-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      max_image_size_mb: 1536  # 1.5GB for dev container
+      max_image_size_mb: 4096
     secrets: inherit
 
   generate-summary:

@@ -48,6 +48,11 @@ on:
         required: false
         default: false
         type: boolean
+      enable_perf_tracking:
+        description: 'Enable SST performance tracking (WARNING: adds runtime overhead, not for production)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -61,7 +66,7 @@ jobs:
     uses: ./.github/workflows/_reusable-build-containers.yml
     with:
       container_type: 'core'
-      image_prefix: '${{ github.repository_owner }}/ar-sst'
+      image_prefix: '${{ github.repository_owner }}/sst'
       tag_suffix: '${{ inputs.sst_version }}'
       build_platforms: '${{ inputs.build_platforms }}'
       sst_version: '${{ inputs.sst_version }}'
@@ -71,6 +76,7 @@ jobs:
       build_target: 'sst-core'
       force_rebuild: ${{ inputs.force_rebuild }}
       ignore_cache: ${{ inputs.ignore_cache }}
+      enable_perf_tracking: ${{ inputs.enable_perf_tracking }}
     secrets: inherit
 
   build-full-containers:
@@ -81,7 +87,7 @@ jobs:
     uses: ./.github/workflows/_reusable-build-containers.yml
     with:
       container_type: 'full'
-      image_prefix: '${{ github.repository_owner }}/ar-sst'
+      image_prefix: '${{ github.repository_owner }}/sst'
       tag_suffix: '${{ inputs.sst_version }}'
       build_platforms: '${{ inputs.build_platforms }}'
       sst_version: '${{ inputs.sst_version }}'
@@ -91,6 +97,7 @@ jobs:
       build_target: 'sst-full'
       force_rebuild: ${{ inputs.force_rebuild }}
       ignore_cache: ${{ inputs.ignore_cache }}
+      enable_perf_tracking: ${{ inputs.enable_perf_tracking }}
     secrets: inherit
 
   validate-core-containers:
@@ -159,15 +166,15 @@ jobs:
           echo "Tagging SST ${{ inputs.sst_version }} containers as 'latest'"
 
           if [[ "${{ inputs.container_types }}" == *"core"* ]]; then
-            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-core:${{ inputs.sst_version }}"
-            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-core:latest"
+            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core:${{ inputs.sst_version }}"
+            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core:latest"
             echo "Tagging core: $SOURCE_TAG -> $LATEST_TAG"
             docker buildx imagetools create --tag "$LATEST_TAG" "$SOURCE_TAG"
           fi
 
           if [[ "${{ inputs.container_types }}" == *"full"* ]]; then
-            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-full:${{ inputs.sst_version }}"
-            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/ar-sst-full:latest"
+            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-full:${{ inputs.sst_version }}"
+            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-full:latest"
             echo "Tagging full: $SOURCE_TAG -> $LATEST_TAG"
             docker buildx imagetools create --tag "$LATEST_TAG" "$SOURCE_TAG"
           fi
