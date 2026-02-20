@@ -82,6 +82,7 @@ FROM base AS core-build
 # Re-declare ARG for this stage
 ARG SSTver=15.0.0
 ARG NCPUS=2
+ARG ENABLE_PERF_TRACKING
 
 RUN mkdir -p /opt/SST/${SSTver}/src
 
