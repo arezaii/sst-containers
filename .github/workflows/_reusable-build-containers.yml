@@ -31,6 +31,11 @@ on:
         required: false
         type: string
 
+      sst_elements_version:
+        description: 'SST-elements version override (defaults to sst_version)'
+        required: false
+        type: string
+
       mpich_version:
         description: 'MPICH version'
         required: false
@@ -208,8 +213,13 @@ jobs:
         run: |
           # Determine if we need elements based on build target or elements repo input
           if [[ "${{ inputs.build_target }}" == "sst-full" ]] || [[ "${{ inputs.container_type }}" == "full" ]] || [[ -n "${{ inputs.sst_elements_repo }}" ]]; then
+            ELEMENTS_VERSION="${{ inputs.sst_elements_version }}"
+            if [[ -z "$ELEMENTS_VERSION" ]]; then
+              ELEMENTS_VERSION="${{ inputs.sst_version }}"
+            fi
             echo "needs_elements=true" >> $GITHUB_OUTPUT
-            echo "cache_key=sst-sources-full-${{ inputs.sst_version }}" >> $GITHUB_OUTPUT
+            echo "effective_elements_version=${ELEMENTS_VERSION}" >> $GITHUB_OUTPUT
+            echo "cache_key=sst-sources-full-${{ inputs.sst_version }}-${ELEMENTS_VERSION}" >> $GITHUB_OUTPUT
           else
             echo "needs_elements=false" >> $GITHUB_OUTPUT
             echo "cache_key=sst-sources-core-${{ inputs.sst_version }}" >> $GITHUB_OUTPUT
@@ -230,7 +240,7 @@ jobs:
         with:
           path: |
             Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
-            Containerfiles/sstelements-${{ inputs.sst_version }}.tar.gz
+            Containerfiles/sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz
           key: ${{ steps.sst-cache-config.outputs.cache_key }}
 
       - name: Download SST sources
@@ -245,7 +255,7 @@ jobs:
           # Only download elements if building full version or elements are explicitly needed
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
             echo "Downloading SST-elements sources..."
-            wget https://github.com/sstsimulator/sst-elements/releases/download/v${{ inputs.sst_version }}_Final/sstelements-${{ inputs.sst_version }}.tar.gz --no-check-certificate
+            wget https://github.com/sstsimulator/sst-elements/releases/download/v${{ steps.sst-cache-config.outputs.effective_elements_version }}_Final/sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz --no-check-certificate
           else
             echo "Skipping SST-elements download for core-only build"
           fi
@@ -262,8 +272,8 @@ jobs:
 
           # Check elements sources exist when needed
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
-            if [ ! -f "sstelements-${{ inputs.sst_version }}.tar.gz" ]; then
-              echo "ERROR: SST-elements source file sstelements-${{ inputs.sst_version }}.tar.gz not found but required for build target '${{ inputs.build_target }}'"
+            if [ ! -f "sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz" ]; then
+              echo "ERROR: SST-elements source file sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz not found but required for build target '${{ inputs.build_target }}'"
               exit 1
             fi
           fi
@@ -319,6 +329,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             ${{ (inputs.container_type == 'core' || inputs.container_type == 'full') && inputs.sst_version && format('SSTver={0}', inputs.sst_version) || '' }}
+            ${{ inputs.sst_elements_version && format('SST_ELEMENTS_VERSION={0}', inputs.sst_elements_version) || '' }}
             ${{ inputs.mpich_version && format('mpich={0}', inputs.mpich_version) || '' }}
             ${{ inputs.sst_core_repo && format('SSTrepo={0}', inputs.sst_core_repo) || '' }}
             ${{ inputs.sst_core_ref && format('tag={0}', inputs.sst_core_ref) || '' }}
@@ -358,7 +369,11 @@ jobs:
         if: inputs.sst_version != '' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
         run: |
           # Use build-type specific artifact name
-          ARTIFACT_NAME="sst-sources-${{ steps.sst-cache-config.outputs.needs_elements == 'true' && 'full' || 'core' }}-${{ inputs.sst_version }}"
+          if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
+            ARTIFACT_NAME="sst-sources-full-${{ inputs.sst_version }}-${{ steps.sst-cache-config.outputs.effective_elements_version }}"
+          else
+            ARTIFACT_NAME="sst-sources-core-${{ inputs.sst_version }}"
+          fi
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
 
           # Check if artifact already exists from another job
@@ -387,7 +402,7 @@ jobs:
           name: ${{ steps.check-sst-artifact.outputs.artifact_name }}
           path: |
             Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
-            Containerfiles/sstelements-${{ inputs.sst_version }}.tar.gz
+            Containerfiles/sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz
           retention-days: 10
 
   collect-images:

@@ -10,6 +10,10 @@ on:
         description: 'SST version to build (e.g., 15.1.0, 15.0.0)'
         required: true
         type: string
+      sst_elements_version:
+        description: 'SST-elements version for full builds (defaults to sst_version)'
+        required: false
+        type: string
       container_types:
         description: 'Container types to build'
         required: false
@@ -91,6 +95,7 @@ jobs:
       tag_suffix: '${{ inputs.sst_version }}'
       build_platforms: '${{ inputs.build_platforms }}'
       sst_version: '${{ inputs.sst_version }}'
+      sst_elements_version: '${{ inputs.sst_elements_version }}'
       mpich_version: '${{ inputs.mpich_version }}'
       containerfile_path: 'Containerfiles/Containerfile'
       docker_context: 'Containerfiles'
