@@ -356,11 +356,29 @@ jobs:
         run: |
           echo "Built image: ${{ steps.tags.outputs.temp_tag }}"
 
+      - name: Check if MPICH artifact exists
+        id: check-mpich-artifact
+        if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true'
+        run: |
+          ARTIFACT_NAME="mpich-${{ inputs.mpich_version }}"
+          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+
+          # Check if artifact already exists from another job
+          if gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --paginate | jq -r '.artifacts[].name' | grep -q "^${ARTIFACT_NAME}$"; then
+            echo "artifact_exists=true" >> $GITHUB_OUTPUT
+            echo "MPICH artifact ${ARTIFACT_NAME} already exists, skipping upload"
+          else
+            echo "artifact_exists=false" >> $GITHUB_OUTPUT
+            echo "MPICH artifact ${ARTIFACT_NAME} does not exist, will upload"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload MPICH artifact (for caching across jobs)
         uses: actions/upload-artifact@v4
-        if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true'
+        if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true' && steps.check-mpich-artifact.outputs.artifact_exists != 'true'
         with:
-          name: mpich-${{ inputs.mpich_version }}
+          name: ${{ steps.check-mpich-artifact.outputs.artifact_name }}
           path: Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
           retention-days: 10
 
