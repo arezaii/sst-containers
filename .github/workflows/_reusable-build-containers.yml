@@ -175,7 +175,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      actions: read
     strategy:
       matrix:
         platform: ${{ fromJson(needs.prepare-platforms.outputs.platforms) }}
