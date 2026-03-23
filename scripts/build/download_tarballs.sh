@@ -195,8 +195,8 @@ if [[ "$DOWNLOAD_SST_CORE" == "true" ]]; then
 fi
 
 if [[ "$DOWNLOAD_SST_ELEMENTS" == "true" ]]; then
-    # Keep filename pinned to SST_VERSION because Containerfile expects sstelements-${SST_VERSION}.tar.gz.
-    download_file "$SST_ELEMENTS_URL" "sstelements-${SST_VERSION}.tar.gz" "SST-elements ${SST_ELEMENTS_VERSION} (saved as sstelements-${SST_VERSION}.tar.gz)"
+    # Save with elements version filename because Containerfile expects sstelements-${SST_ELEMENTS_VERSION}.tar.gz
+    download_file "$SST_ELEMENTS_URL" "sstelements-${SST_ELEMENTS_VERSION}.tar.gz" "SST-elements ${SST_ELEMENTS_VERSION}"
 fi
 
 echo ""
@@ -213,7 +213,7 @@ if [[ "$DOWNLOAD_SST_CORE" == "true" ]]; then
     files+=("sstcore-${SST_VERSION}.tar.gz")
 fi
 if [[ "$DOWNLOAD_SST_ELEMENTS" == "true" ]]; then
-    files+=("sstelements-${SST_VERSION}.tar.gz")
+    files+=("sstelements-${SST_ELEMENTS_VERSION}.tar.gz")
 fi
 
 all_present=true
