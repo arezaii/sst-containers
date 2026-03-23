@@ -125,7 +125,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  BUILD_NCPUS: 4
+  BUILD_NCPUS: 2
 
 jobs:
   prepare-platforms:
