@@ -18,7 +18,7 @@ fi
 find_project_root() {
     local dir="$1"
     while [[ "$dir" != "/" ]]; do
-        if [[ -f "$dir/CHANGELOG.md" && -d "$dir/scripts" && -f "$dir/test.sh" ]]; then
+        if [[ -f "$dir/README.md" && -d "$dir/scripts" && -f "$dir/DEVCONTAINER_SETUP.md" ]]; then
             echo "$dir"
             return 0
         fi
