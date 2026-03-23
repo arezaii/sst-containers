@@ -283,12 +283,12 @@ get_extra_args() {
     local engine_args=$(get_container_engine_args)
     [[ -n "$engine_args" ]] && args+=("$engine_args")
 
-    printf '%s\n' "${args[@]:-}"
+    printf '%s\n' "${args[@]}"
 }
 
 # Get remaining positional arguments
 get_remaining_args() {
-    if [[ ${#REMAINING_ARGS[@]:-0} -gt 0 ]]; then
+    if [[ ${#REMAINING_ARGS[@]} -gt 0 ]]; then
         printf '%s\n' "${REMAINING_ARGS[@]}"
     fi
 }
