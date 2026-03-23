@@ -65,11 +65,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Validate container
+      - name: Find image for this architecture
+        id: find-image
         run: |
           ARCH="${{ steps.platform.outputs.arch }}"
-
-          # Parse image tags and find the one for this architecture
           TAGS='${{ inputs.image_tags }}'
           IMAGE_TAG=$(echo "$TAGS" | jq -r ".[] | select(endswith(\"-${ARCH}\"))")
 
@@ -78,31 +77,14 @@ jobs:
             exit 1
           fi
 
-          echo "Validating container: $IMAGE_TAG"
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
 
-          # Pull and inspect the image
-          docker pull "$IMAGE_TAG"
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-          # Get image size and validate
-          IMAGE_SIZE=$(docker image inspect "$IMAGE_TAG" --format='{{.Size}}')
-          IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))
-          MAX_SIZE_MB=${{ inputs.max_image_size_mb }}
-
-          echo "Image size: ${IMAGE_SIZE_MB} MB"
-          if [ $IMAGE_SIZE_MB -gt $MAX_SIZE_MB ]; then
-            echo "ERROR: Image size ($IMAGE_SIZE_MB MB) exceeds maximum ($MAX_SIZE_MB MB)"
-            exit 1
-          fi
-
-          # Basic container validation (without running commands)
-          echo "Inspecting container metadata..."
-
-          # Verify the container can be instantiated
-          CONTAINER_ID=$(docker create --platform ${{ matrix.platform }} "$IMAGE_TAG" /bin/true)
-          if [ -n "$CONTAINER_ID" ]; then
-            docker rm "$CONTAINER_ID" >/dev/null 2>&1
-            echo "Container validation successful: ${IMAGE_SIZE_MB} MB, ${{ matrix.platform }}"
-          else
-            echo "ERROR: Failed to instantiate container"
-            exit 1
-          fi
+      - name: Validate container
+        env:
+          IMAGE_TAG: ${{ steps.find-image.outputs.image_tag }}
+          PLATFORM: ${{ matrix.platform }}
+          MAX_SIZE_MB: ${{ inputs.max_image_size_mb }}
+        run: ./scripts/orchestration/validate-container.sh

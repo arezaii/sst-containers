@@ -49,50 +49,11 @@ jobs:
 
       - name: Validate experiment directory
         id: check
-        run: |
-          EXPERIMENT="${{ inputs.experiment_name }}"
-          echo "Checking experiment directory: $EXPERIMENT"
-
-          if [ ! -d "$EXPERIMENT" ]; then
-            echo "ERROR: Experiment directory '$EXPERIMENT' does not exist"
-            echo "experiment_exists=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "experiment_exists=true" >> $GITHUB_OUTPUT
-
-          # Check if experiment has its own Containerfile
-          if [ -f "$EXPERIMENT/Containerfile" ]; then
-            echo "has_containerfile=true" >> $GITHUB_OUTPUT
-            echo "resolved_base_image=" >> $GITHUB_OUTPUT
-          else
-            echo "has_containerfile=false" >> $GITHUB_OUTPUT
-
-            # Resolve base image path - add GHCR registry if not specified
-            BASE_IMAGE="${{ inputs.base_image }}"
-            if [[ "$BASE_IMAGE" == *"/"* ]]; then
-              # Image already contains registry/namespace
-              RESOLVED_IMAGE="$BASE_IMAGE"
-            else
-              # Default to current repo owner's GHCR
-              RESOLVED_IMAGE="ghcr.io/${{ github.repository_owner }}/$BASE_IMAGE"
-            fi
-
-            # Verify the base image exists and is accessible
-            echo "resolved_base_image=$RESOLVED_IMAGE" >> $GITHUB_OUTPUT
-            if docker manifest inspect "$RESOLVED_IMAGE" >/dev/null 2>&1; then
-              echo "Base image accessible"
-            else
-              echo "Base image not found: $RESOLVED_IMAGE"
-              echo "For images in this repository, use format: sst-core:latest"
-              echo "For external images, use full path: ghcr.io/username/image:tag"
-              exit 1
-            fi
-          fi
-
-          # Count files in experiment directory
-          FILES_COUNT=$(find "$EXPERIMENT" -type f | wc -l)
-          echo "files_count=$FILES_COUNT" >> $GITHUB_OUTPUT
+        env:
+          EXPERIMENT_NAME: ${{ inputs.experiment_name }}
+          BASE_IMAGE: ${{ inputs.base_image }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: ./scripts/orchestration/validate-experiment-inputs.sh
 
   build-experiment-containers:
     needs: [validate-experiment]

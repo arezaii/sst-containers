@@ -113,7 +113,7 @@ on:
     outputs:
       built_images:
         description: 'JSON array of built image tags'
-        value: ${{ jobs.collect-images.outputs.built_images }}
+        value: ${{ jobs.create-manifest.outputs.built_images }}
 
       manifest_tag:
         description: 'Fat manifest tag'
@@ -148,26 +148,19 @@ jobs:
       experiment_pattern: ${{ steps.config.outputs.experiment_pattern }}
       default_pattern: ${{ steps.config.outputs.default_pattern }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Configure image naming
         id: config
-        run: |
-          # Build image name components based on inputs
-          IMAGE_PREFIX="${{ inputs.image_prefix }}"
-          if [ "${{ inputs.enable_perf_tracking }}" = "true" ] && [[ "${{ inputs.container_type }}" =~ ^(core|full|custom)$ ]]; then
-            IMAGE_PREFIX="${IMAGE_PREFIX}-perf-track"
-          fi
-
-          # Define tag patterns for different container types
-          CORE_FULL_PATTERN="${{ env.REGISTRY }}/${IMAGE_PREFIX}-${{ inputs.container_type }}:${{ inputs.tag_suffix }}"
-          DEV_CUSTOM_PATTERN="${{ env.REGISTRY }}/${IMAGE_PREFIX}:${{ inputs.tag_suffix }}"
-          EXPERIMENT_PATTERN="${{ env.REGISTRY }}/${{ inputs.image_prefix }}/${{ inputs.experiment_name }}:${{ inputs.tag_suffix }}"
-          DEFAULT_PATTERN="${{ env.REGISTRY }}/${IMAGE_PREFIX}:${{ inputs.tag_suffix }}"
-
-          echo "image_prefix=${IMAGE_PREFIX}" >> $GITHUB_OUTPUT
-          echo "core_full_pattern=${CORE_FULL_PATTERN}" >> $GITHUB_OUTPUT
-          echo "dev_custom_pattern=${DEV_CUSTOM_PATTERN}" >> $GITHUB_OUTPUT
-          echo "experiment_pattern=${EXPERIMENT_PATTERN}" >> $GITHUB_OUTPUT
-          echo "default_pattern=${DEFAULT_PATTERN}" >> $GITHUB_OUTPUT
+        env:
+          CONTAINER_TYPE: ${{ inputs.container_type }}
+          IMAGE_PREFIX: ${{ inputs.image_prefix }}
+          TAG_SUFFIX: ${{ inputs.tag_suffix }}
+          REGISTRY: ${{ env.REGISTRY }}
+          ENABLE_PERF_TRACKING: ${{ inputs.enable_perf_tracking }}
+          EXPERIMENT_NAME: ${{ inputs.experiment_name }}
+        run: ./scripts/orchestration/prepare-image-config.sh
 
   build-containers:
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
@@ -193,19 +186,7 @@ jobs:
       - name: Download MPICH source
         if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true'
         working-directory: Containerfiles
-        run: |
-          echo "Downloading MPICH ${{ inputs.mpich_version }}..."
-          wget https://www.mpich.org/static/downloads/${{ inputs.mpich_version }}/mpich-${{ inputs.mpich_version }}.tar.gz --no-check-certificate
-
-      - name: List available source files
-        if: inputs.mpich_version != ''
-        working-directory: Containerfiles
-        run: |
-          if [ ! -f "mpich-${{ inputs.mpich_version }}.tar.gz" ]; then
-            echo "ERROR: MPICH file mpich-${{ inputs.mpich_version }}.tar.gz not found"
-            exit 1
-          fi
-          echo "MPICH source file validated"
+        run: ../scripts/build/download_tarballs.sh --component mpich ${{ inputs.mpich_version }}
 
       - name: Determine SST cache key and paths
         id: sst-cache-config
@@ -247,12 +228,7 @@ jobs:
         if: inputs.sst_version != '' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
         working-directory: Containerfiles
         run: |
-          echo "Downloading SST ${{ inputs.sst_version }} sources..."
-
-          # Always download SST-core
-          wget https://github.com/sstsimulator/sst-core/releases/download/v${{ inputs.sst_version }}_Final/sstcore-${{ inputs.sst_version }}.tar.gz --no-check-certificate
-
-          # Only download elements if building full version or elements are explicitly needed
+          COMPONENT="sst-core"
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
             echo "Downloading SST-elements sources..."
             wget https://github.com/sstsimulator/sst-elements/releases/download/v${{ steps.sst-cache-config.outputs.effective_elements_version }}_Final/sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz --no-check-certificate
@@ -276,7 +252,9 @@ jobs:
               echo "ERROR: SST-elements source file sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz not found but required for build target '${{ inputs.build_target }}'"
               exit 1
             fi
+            COMPONENT="sst-full"
           fi
+          ../scripts/build/download_tarballs.sh --component "$COMPONENT" ${{ inputs.sst_version }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -423,54 +401,15 @@ jobs:
             Containerfiles/sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz
           retention-days: 10
 
-  collect-images:
+  create-manifest:
     runs-on: ubuntu-latest
     needs: [build-containers, prepare-image-config]
     if: needs.build-containers.result == 'success'
-    outputs:
-      built_images: ${{ steps.collect-all.outputs.built_images }}
-    steps:
-      - name: Collect all built images
-        id: collect-all
-        run: |
-          PLATFORMS="${{ inputs.build_platforms }}"
-
-          # Build JSON array of all architecture-specific images using pre-computed patterns
-          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
-          IMAGES="[]"
-
-          for platform in "${PLATFORM_ARRAY[@]}"; do
-            ARCH="${platform#linux/}"
-
-            case "${{ inputs.container_type }}" in
-              "core"|"full")
-                TEMP_TAG="${{ needs.prepare-image-config.outputs.core_full_pattern }}-${ARCH}"
-                ;;
-              "dev"|"custom")
-                TEMP_TAG="${{ needs.prepare-image-config.outputs.dev_custom_pattern }}-${ARCH}"
-                ;;
-              "experiment")
-                TEMP_TAG="${{ needs.prepare-image-config.outputs.experiment_pattern }}-${ARCH}"
-                ;;
-              *)
-                TEMP_TAG="${{ needs.prepare-image-config.outputs.default_pattern }}-${ARCH}"
-                ;;
-            esac
-
-            IMAGES=$(echo "$IMAGES" | jq -c --arg tag "$TEMP_TAG" '. += [$tag]')
-          done
-
-          echo "built_images=$IMAGES" >> $GITHUB_OUTPUT
-          echo "Collected images: $IMAGES"
-
-  create-manifest:
-    runs-on: ubuntu-latest
-    needs: [collect-images, prepare-image-config]
-    if: needs.collect-images.result == 'success'
     permissions:
       contents: read
       packages: write
     outputs:
+      built_images: ${{ steps.manifest.outputs.built_images }}
       manifest_tag: ${{ steps.manifest.outputs.manifest_tag }}
     steps:
       - name: Set up Docker Buildx
@@ -488,7 +427,6 @@ jobs:
         run: |
           PLATFORMS="${{ inputs.build_platforms }}"
 
-          # Use pre-computed patterns based on container type
           case "${{ inputs.container_type }}" in
             "core"|"full")
               MANIFEST_TAG="${{ needs.prepare-image-config.outputs.core_full_pattern }}"
@@ -506,17 +444,21 @@ jobs:
 
           echo "Creating manifest: ${MANIFEST_TAG}"
 
-          # Collect architecture-specific images
           IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
           MANIFESTS=""
+          IMAGES="[]"
 
           for platform in "${PLATFORM_ARRAY[@]}"; do
             ARCH="${platform#linux/}"
             TEMP_TAG="${MANIFEST_TAG}-${ARCH}"
+            IMAGES=$(echo "$IMAGES" | jq -c --arg tag "$TEMP_TAG" '. += [$tag]')
+
             if docker manifest inspect "${TEMP_TAG}" >/dev/null 2>&1; then
               MANIFESTS="$MANIFESTS ${TEMP_TAG}"
             fi
           done
+
+          echo "built_images=${IMAGES}" >> $GITHUB_OUTPUT
 
           if [ -n "$MANIFESTS" ]; then
             echo "Creating multi-arch manifest: ${MANIFEST_TAG}"

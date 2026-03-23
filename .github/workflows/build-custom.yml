@@ -64,33 +64,17 @@ jobs:
       build_type: ${{ steps.validate.outputs.build_type }}
       tag_suffix: ${{ steps.validate.outputs.tag_suffix }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Validate inputs and determine build parameters
         id: validate
-        run: |
-          # Determine build type
-          if [ -n "${{ inputs.sst_elements_repo }}" ]; then
-            if [ -z "${{ inputs.sst_elements_ref }}" ]; then
-              echo "::error::SST-elements ref is required when elements_repo is provided"
-              exit 1
-            fi
-            echo "build_type=full" >> $GITHUB_OUTPUT
-          else
-            echo "build_type=core" >> $GITHUB_OUTPUT
-          fi
-
-          # Determine image tag
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            echo "tag_suffix=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
-          else
-            # Use core ref as default tag (branch name, tag name, or short SHA)
-            CORE_REF="${{ inputs.sst_core_ref }}"
-            # Clean up ref for use as tag (replace / with -)
-            TAG=$(echo "$CORE_REF" | sed 's/\//-/g' | cut -c1-50)
-            echo "tag_suffix=${TAG}" >> $GITHUB_OUTPUT
-          fi
-
-          echo "Build type: $(cat $GITHUB_OUTPUT | grep build_type | cut -d= -f2)"
-          echo "Tag suffix: $(cat $GITHUB_OUTPUT | grep tag_suffix | cut -d= -f2)"
+        env:
+          CORE_REF: ${{ inputs.sst_core_ref }}
+          ELEMENTS_REPO: ${{ inputs.sst_elements_repo }}
+          ELEMENTS_REF: ${{ inputs.sst_elements_ref }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: ./scripts/orchestration/validate-custom-inputs.sh
 
   build-custom-containers:
     needs: [validate-inputs]

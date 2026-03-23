@@ -50,18 +50,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Get current commit SHA from SST-core master branch
           CURRENT_SHA=$(gh api /repos/sstsimulator/sst-core/branches/${{ env.SST_BRANCH }} --jq '.commit.sha')
           SHORT_SHA=${CURRENT_SHA:0:7}
 
           echo "Current SST-core ${{ env.SST_BRANCH }} SHA: $CURRENT_SHA"
           echo "Short SHA: $SHORT_SHA"
 
-          # Create our tag as master-{short_sha}
           TARGET_TAG="master-${SHORT_SHA}"
           echo "Checking for existing tag: $TARGET_TAG"
 
-          # Check if multi-arch manifest with this tag exists
           CORE_IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core"
           if docker manifest inspect "${CORE_IMAGE}:${TARGET_TAG}" >/dev/null 2>&1; then
             echo "Multi-arch manifest with tag $TARGET_TAG already exists, skipping build"
@@ -71,14 +68,12 @@ jobs:
             BUILD_NEEDED="true"
           fi
 
-          # Handle force_rebuild override (only if explicitly set)
           FORCE_REBUILD="${{ inputs.force_rebuild }}"
           if [ "$FORCE_REBUILD" = "true" ]; then
             BUILD_NEEDED="true"
             echo "Build forced by force_rebuild parameter"
           fi
 
-          # Set outputs
           echo "build_needed=$BUILD_NEEDED" >> $GITHUB_OUTPUT
           echo "current_sha=$CURRENT_SHA" >> $GITHUB_OUTPUT
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
