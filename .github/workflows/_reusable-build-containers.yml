@@ -186,7 +186,7 @@ jobs:
       - name: Download MPICH source
         if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true'
         working-directory: Containerfiles
-        run: ../scripts/build/download_tarballs.sh --component mpich ${{ inputs.mpich_version }}
+        run: ../scripts/build/download_tarballs.sh --mpich-version ${{ inputs.mpich_version }}
 
       - name: Determine SST cache key and paths
         id: sst-cache-config
