@@ -230,11 +230,10 @@ jobs:
         run: |
           COMPONENT="sst-core"
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
-            echo "Downloading SST-elements sources..."
-            wget https://github.com/sstsimulator/sst-elements/releases/download/v${{ steps.sst-cache-config.outputs.effective_elements_version }}_Final/sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz --no-check-certificate
-          else
-            echo "Skipping SST-elements download for core-only build"
+            COMPONENT="sst-full"
           fi
+
+          ../scripts/build/download_tarballs.sh --component "$COMPONENT" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}" ${{ inputs.sst_version }}
 
       - name: Validate SST sources
         if: inputs.sst_version != ''
@@ -252,9 +251,7 @@ jobs:
               echo "ERROR: SST-elements source file sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz not found but required for build target '${{ inputs.build_target }}'"
               exit 1
             fi
-            COMPONENT="sst-full"
           fi
-          ../scripts/build/download_tarballs.sh --component "$COMPONENT" ${{ inputs.sst_version }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
