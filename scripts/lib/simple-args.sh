@@ -25,6 +25,7 @@ REGISTRY=""
 TAG_SUFFIX=""
 TAG_SUFFIX_SET="false"
 HELP_REQUESTED="false"
+TEST_TAGGING="false"
 
 # Build-specific variables
 BUILD_NCPUS=""
@@ -69,6 +70,7 @@ init_argument_defaults() {
     USE_PODMAN="false"
     HELP_REQUESTED="false"
     TAG_SUFFIX_SET="false"
+    TEST_TAGGING="false"
     BUILD_ARGS=()
     REMAINING_ARGS=()
 
@@ -204,6 +206,10 @@ parse_simple_arguments() {
                 BUILD_ARGS+=("$2")
                 shift 2
                 ;;
+            --test-tagging)
+                TEST_TAGGING="true"
+                shift
+                ;;
             *)
                 # Store as remaining argument
                 REMAINING_ARGS+=("$1")
@@ -247,6 +253,7 @@ show_simple_help() {
     echo "  --validate-only          Only validate, don't build"
     echo "  --validate-quick         Quick validation (no execution tests)"
     echo "  --validate-no-exec       Validate without executing containers"
+    echo "  --test-tagging           Test latest tagging functionality after build"
     echo "  --docker                 Use docker container engine"
     echo "  --podman                 Use podman container engine"
     echo "  --help, -h               Show this help message"
@@ -278,6 +285,7 @@ get_extra_args() {
     [[ "$VALIDATE_QUICK" == "true" ]] && args+=("--validate-quick")
     [[ "$VALIDATE_NO_EXEC" == "true" ]] && args+=("--validate-no-exec")
     [[ "$ENABLE_PERF_TRACKING" == "true" ]] && args+=("--enable-perf-tracking")
+    [[ "$TEST_TAGGING" == "true" ]] && args+=("--test-tagging")
 
     # Add container engine
     local engine_args=$(get_container_engine_args)

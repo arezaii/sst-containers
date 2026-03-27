@@ -154,11 +154,17 @@ jobs:
   tag-as-latest:
     runs-on: ubuntu-latest
     needs: [build-core-containers, build-full-containers]
-    if: inputs.tag_as_latest && ((needs.build-core-containers.result == 'success' || needs.build-core-containers.result == 'skipped') && (needs.build-full-containers.result == 'success' || needs.build-full-containers.result == 'skipped'))
+    if: inputs.tag_as_latest && (
+        (contains(inputs.container_types, 'core') == false || needs.build-core-containers.result == 'success') &&
+        (contains(inputs.container_types, 'full') == false || needs.build-full-containers.result == 'success')
+      )
     permissions:
       contents: read
       packages: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -171,18 +177,64 @@ jobs:
 
       - name: Tag containers as latest
         run: |
-          echo "Tagging SST ${{ inputs.sst_version }} containers as 'latest'"
+          # Source the configuration library for tagging functions
+          source scripts/lib/config.sh
 
-          if [[ "${{ inputs.container_types }}" == *"core"* ]]; then
-            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core:${{ inputs.sst_version }}"
-            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-core:latest"
-            echo "Tagging core: $SOURCE_TAG -> $LATEST_TAG"
-            docker buildx imagetools create --tag "$LATEST_TAG" "$SOURCE_TAG"
-          fi
+          echo "Tagging containers as 'latest'"
 
-          if [[ "${{ inputs.container_types }}" == *"full"* ]]; then
-            SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-full:${{ inputs.sst_version }}"
-            LATEST_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/sst-full:latest"
-            echo "Tagging full: $SOURCE_TAG -> $LATEST_TAG"
-            docker buildx imagetools create --tag "$LATEST_TAG" "$SOURCE_TAG"
-          fi
+          # Function to process built images from a job and create latest tags
+          process_job_images() {
+            local job_name="$1"
+            local job_result="$2"
+            local built_images="$3"
+
+            if [[ "$job_result" != "success" ]]; then
+              echo "Skipping $job_name (result: $job_result)"
+              return
+            fi
+
+            echo "Processing $job_name for latest tagging..."
+
+            # Generate tagging information using library function
+            local tagging_info
+            tagging_info=$(generate_latest_tagging_info "$built_images")
+
+            if [[ "$(echo "$tagging_info" | jq 'length')" -eq 0 ]]; then
+              echo "Warning: No tagging information generated for $job_name"
+              return
+            fi
+
+            # Process each base image for latest tagging
+            echo "$tagging_info" | jq -c '.[]' | while read -r entry; do
+              local base_name latest_tag
+              base_name=$(echo "$entry" | jq -r '.base_name')
+              latest_tag=$(echo "$entry" | jq -r '.latest_tag')
+
+              echo "  Creating latest tag: $latest_tag"
+              echo "  Base name: $base_name"
+
+              # Get platform images for this base
+              local platform_images=()
+              while IFS= read -r img; do
+                if [[ -n "$img" ]]; then
+                  platform_images+=("$img")
+                  echo "    Platform image: $img"
+                fi
+              done < <(echo "$entry" | jq -r '.platform_images[]')
+
+              if [[ ${#platform_images[@]} -gt 0 ]]; then
+                # Create the latest tag from all platform images
+                echo "  Executing: docker buildx imagetools create --tag '$latest_tag' ${platform_images[*]}"
+                docker buildx imagetools create --tag "$latest_tag" "${platform_images[@]}"
+                echo "  [SUCCESS] Created: $latest_tag"
+              else
+                echo "  Warning: No platform images found for $base_name"
+              fi
+            done
+          }
+
+          # Process all build jobs that completed successfully
+          process_job_images "build-core-containers" "${{ needs.build-core-containers.result }}" '${{ needs.build-core-containers.outputs.built_images }}'
+          process_job_images "build-full-containers" "${{ needs.build-full-containers.result }}" '${{ needs.build-full-containers.outputs.built_images }}'
+
+          echo "Latest tagging completed!"

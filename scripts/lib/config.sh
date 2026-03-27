@@ -32,10 +32,6 @@ VALID_SST_VERSIONS=("14.0.0" "14.1.0" "15.0.0" "15.1.0" "15.1.1" "15.1.2")
 # Standard images that should resolve from Docker Hub without a custom registry prefix.
 DOCKER_LIBRARY_IMAGES=(
     "ubuntu" "alpine" "debian" "centos" "fedora" "rocky" "almalinux" "amazonlinux"
-    "busybox" "scratch" "node" "python" "golang" "openjdk" "nginx" "httpd"
-    "redis" "postgres" "mysql" "mariadb" "mongo" "memcached" "rabbitmq"
-    "elasticsearch" "kibana" "grafana" "prometheus" "consul" "vault" "traefik"
-    "caddy" "haproxy" "envoy"
 )
 
 # Get configuration value with fallback
@@ -222,4 +218,68 @@ generate_base_image_tag() {
     local sst_version="$3"
 
     echo "${registry}/sst-${container_type}:${sst_version}"
+}
+
+# Generate latest tagging information from built images JSON
+# Returns JSON array with latest tag information for each unique image base
+generate_latest_tagging_info() {
+    local built_images_json="$1"
+
+    if [[ -z "$built_images_json" ]] || [[ "$built_images_json" == "null" ]]; then
+        echo "[]"
+        return 0
+    fi
+
+    # Parse built images and group by base name (removing architecture suffix)
+    local tagging_info="[]"
+    local processed_bases=()
+
+    # Process each image in the JSON array
+    while IFS= read -r image; do
+        if [[ -n "$image" ]] && [[ "$image" != "null" ]]; then
+            # Extract base name by removing architecture suffix
+            # Example: ghcr.io/owner/sst-core-amd64:15.1.2 -> ghcr.io/owner/sst-core
+            if [[ "$image" =~ ^(.+)-(amd64|arm64|x86_64|aarch64):(.+)$ ]]; then
+                local base_name="${BASH_REMATCH[1]}"
+                local latest_tag="${base_name}:latest"
+
+                # Check if we've already processed this base name
+                local already_processed=false
+                if [[ ${#processed_bases[@]} -gt 0 ]]; then
+                    for processed in "${processed_bases[@]}"; do
+                        if [[ "$processed" == "$base_name" ]]; then
+                            already_processed=true
+                            break
+                        fi
+                    done
+                fi
+
+                if [[ "$already_processed" == "false" ]]; then
+                    processed_bases+=("$base_name")
+
+                    # Find all platform images for this base name
+                    local platform_images="[]"
+                    while IFS= read -r check_image; do
+                        if [[ -n "$check_image" ]] && [[ "$check_image" != "null" ]]; then
+                            if [[ "$check_image" =~ ^${base_name}-(amd64|arm64|x86_64|aarch64): ]]; then
+                                platform_images=$(echo "$platform_images" | jq -c --arg img "$check_image" '. += [$img]')
+                            fi
+                        fi
+                    done < <(echo "$built_images_json" | jq -r '.[]')
+
+                    # Add to tagging info if we found platform images
+                    if [[ "$(echo "$platform_images" | jq 'length')" -gt 0 ]]; then
+                        local entry=$(jq -n \
+                            --arg base "$base_name" \
+                            --arg latest "$latest_tag" \
+                            --argjson images "$platform_images" \
+                            '{base_name: $base, latest_tag: $latest, platform_images: $images}')
+                        tagging_info=$(echo "$tagging_info" | jq -c --argjson entry "$entry" '. += [$entry]')
+                    fi
+                fi
+            fi
+        fi
+    done < <(echo "$built_images_json" | jq -r '.[]')
+
+    echo "$tagging_info"
 }
