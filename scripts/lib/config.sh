@@ -241,7 +241,17 @@ generate_latest_tagging_info() {
             # Example: ghcr.io/owner/sst-core-amd64:15.1.2 -> ghcr.io/owner/sst-core
             if [[ "$image" =~ ^(.+)-(amd64|arm64|x86_64|aarch64):(.+)$ ]]; then
                 local base_name="${BASH_REMATCH[1]}"
-                local latest_tag="${base_name}:latest"
+                local source_tag="${BASH_REMATCH[3]}"
+                local latest_tag
+
+                # Determine latest tag based on source tag pattern
+                if [[ "$source_tag" =~ ^master- ]]; then
+                    # Master builds get master-latest tag
+                    latest_tag="${base_name}:master-latest"
+                else
+                    # Release builds get plain latest tag
+                    latest_tag="${base_name}:latest"
+                fi
 
                 # Check if we've already processed this base name
                 local already_processed=false
