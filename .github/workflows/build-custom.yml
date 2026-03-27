@@ -65,7 +65,7 @@ jobs:
       tag_suffix: ${{ steps.validate.outputs.tag_suffix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate inputs and determine build parameters
         id: validate

@@ -45,7 +45,7 @@ jobs:
       resolved_base_image: ${{ steps.check.outputs.resolved_base_image }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate experiment directory
         id: check
