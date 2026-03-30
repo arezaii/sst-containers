@@ -154,9 +154,9 @@ jobs:
   tag-as-latest:
     runs-on: ubuntu-latest
     needs: [build-core-containers, build-full-containers]
-    if: inputs.tag_as_latest && (
-        (contains(inputs.container_types, 'core') == false || needs.build-core-containers.result == 'success') &&
-        (contains(inputs.container_types, 'full') == false || needs.build-full-containers.result == 'success')
+    if: always() && inputs.tag_as_latest && (
+        (contains(inputs.container_types, 'core') && needs.build-core-containers.result == 'success') ||
+        (contains(inputs.container_types, 'full') && needs.build-full-containers.result == 'success')
       )
     permissions:
       contents: read
