@@ -187,39 +187,6 @@ resolve_base_image_reference() {
     echo "ghcr.io/${default_owner}/${base_image}"
 }
 
-# Generate image tag
-generate_image_tag() {
-    local registry="$1"
-    local container_type="$2"
-    local sst_version="$3"
-    local arch="${4:-}"
-
-    if [[ -n "$arch" ]]; then
-        echo "${registry}/sst-${container_type}:${sst_version}-${arch}"
-    else
-        echo "${registry}/sst-${container_type}:${sst_version}"
-    fi
-}
-
-# Generate architecture-specific image tag (matches workflow pattern)
-generate_arch_image_tag() {
-    local registry="$1"
-    local container_type="$2"
-    local sst_version="$3"
-    local arch="$4"
-
-    echo "${registry}/sst-${container_type}:${sst_version}-${arch}"
-}
-
-# Generate base image tag for fat manifest (matches workflow pattern)
-generate_base_image_tag() {
-    local registry="$1"
-    local container_type="$2"
-    local sst_version="$3"
-
-    echo "${registry}/sst-${container_type}:${sst_version}"
-}
-
 # Generate latest tagging information from built images JSON
 # Returns JSON array with latest tag information for each unique image base
 generate_latest_tagging_info() {

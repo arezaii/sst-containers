@@ -74,39 +74,6 @@ register_cleanup_handler() {
     trap cleanup_on_exit EXIT INT TERM
 }
 
-# Add container to cleanup list
-register_container_cleanup() {
-    local engine="$1"
-    local container_name="$2"
-    CLEANUP_CONTAINERS+=("$engine:$container_name")
-}
-
-# Add image to cleanup list
-register_image_cleanup() {
-    local engine="$1"
-    local image_tag="$2"
-    CLEANUP_IMAGES+=("$engine:$image_tag")
-}
-
-# Add volume to cleanup list
-register_volume_cleanup() {
-    local engine="$1"
-    local volume_name="$2"
-    CLEANUP_VOLUMES+=("$engine:$volume_name")
-}
-
-# Add file to cleanup list
-register_file_cleanup() {
-    local file_path="$1"
-    CLEANUP_FILES+=("$file_path")
-}
-
-# Add directory to cleanup list
-register_directory_cleanup() {
-    local dir_path="$1"
-    CLEANUP_DIRECTORIES+=("$dir_path")
-}
-
 # Clean up containers
 cleanup_containers() {
     local engine container_name
@@ -173,29 +140,7 @@ cleanup_directories() {
     done
 }
 
-# Create temporary file with cleanup registration
-create_temp_file() {
-    local suffix="${1:-tmp}"
-    local temp_file
-    temp_file=$(mktemp --suffix=".$suffix")
-    register_file_cleanup "$temp_file"
-    echo "$temp_file"
-}
 
-# Create temporary directory with cleanup registration
-create_temp_directory() {
-    local suffix="${1:-tmp}"
-    local temp_dir
-    temp_dir=$(mktemp -d --suffix=".$suffix")
-    register_directory_cleanup "$temp_dir"
-    echo "$temp_dir"
-}
-
-# Force immediate cleanup (bypass exit handler)
-force_cleanup() {
-    cleanup_on_exit
-    trap - EXIT INT TERM
-}
 
 # Clean up specific resource type immediately
 cleanup_resource_type() {

@@ -176,28 +176,6 @@ log_exec() {
     return 0
 }
 
-# Log with indentation for hierarchical display
-log_indent() {
-    local level="$1"
-    local message="$2"
-    local indent=""
-
-    for ((i=0; i<level; i++)); do
-        indent="  $indent"
-    done
-
-    case "$level" in
-        0) log_info "$message" ;;
-        *)
-            if is_github_actions; then
-                log_info "${indent}$message"
-            else
-                echo -e "  ${BLUE}[INFO]${NC} ${indent}$message"
-            fi
-            ;;
-    esac
-}
-
 # Progress indicator for long operations
 log_progress() {
     local current="$1"

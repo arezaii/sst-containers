@@ -125,22 +125,3 @@ report_validation_metrics() {
 "
     fi
 }
-
-# Export environment variables for GitHub Actions
-export_github_env() {
-    local name="$1"
-    local value="$2"
-
-    if is_github_actions && [[ -n "${GITHUB_ENV:-}" ]]; then
-        echo "${name}=${value}" >> "$GITHUB_ENV"
-    fi
-}
-
-# Mask sensitive information in logs
-mask_value() {
-    local value="$1"
-
-    if is_github_actions; then
-        echo "::add-mask::${value}"
-    fi
-}
