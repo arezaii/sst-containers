@@ -238,10 +238,11 @@ generate_latest_tagging_info() {
     while IFS= read -r image; do
         if [[ -n "$image" ]] && [[ "$image" != "null" ]]; then
             # Extract base name by removing architecture suffix
-            # Example: ghcr.io/owner/sst-core-amd64:15.1.2 -> ghcr.io/owner/sst-core
-            if [[ "$image" =~ ^(.+)-(amd64|arm64|x86_64|aarch64):(.+)$ ]]; then
-                local base_name="${BASH_REMATCH[1]}"
-                local source_tag="${BASH_REMATCH[3]}"
+            # Example: ghcr.io/owner/sst-core:15.1.2-amd64 -> ghcr.io/owner/sst-core
+            if [[ "$image" =~ ^(.+):(.+)-(amd64|arm64|x86_64|aarch64)$ ]]; then
+                local base_image="${BASH_REMATCH[1]}"
+                local source_tag="${BASH_REMATCH[2]}"
+                local base_name="${base_image}"
                 local latest_tag
 
                 # Determine latest tag based on source tag pattern
@@ -271,7 +272,7 @@ generate_latest_tagging_info() {
                     local platform_images="[]"
                     while IFS= read -r check_image; do
                         if [[ -n "$check_image" ]] && [[ "$check_image" != "null" ]]; then
-                            if [[ "$check_image" =~ ^${base_name}-(amd64|arm64|x86_64|aarch64): ]]; then
+                            if [[ "$check_image" =~ ^${base_image}:${source_tag}-(amd64|arm64|x86_64|aarch64)$ ]]; then
                                 platform_images=$(echo "$platform_images" | jq -c --arg img "$check_image" '. += [$img]')
                             fi
                         fi
