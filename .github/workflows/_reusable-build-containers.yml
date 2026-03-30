@@ -228,12 +228,13 @@ jobs:
         if: inputs.sst_version != '' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
         working-directory: Containerfiles
         run: |
-          COMPONENT="sst-core"
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
-            COMPONENT="sst-full"
+            # Download both SST-core and SST-elements
+            ../scripts/build/download_tarballs.sh --sst-version "${{ inputs.sst_version }}" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}"
+          else
+            # Download only SST-core
+            ../scripts/build/download_tarballs.sh --sst-version "${{ inputs.sst_version }}"
           fi
-
-          ../scripts/build/download_tarballs.sh --component "$COMPONENT" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}" ${{ inputs.sst_version }}
 
       - name: Validate SST sources
         if: inputs.sst_version != ''
