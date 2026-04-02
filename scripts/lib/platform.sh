@@ -109,6 +109,20 @@ detect_container_engine() {
         fi
     fi
 
+    # GitHub Actions runners in this repo are configured around Docker-based
+    # actions and authenticated GHCR access, so prefer Docker there even on Linux.
+    if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+        if command -v docker &> /dev/null; then
+            log_debug "Detected docker on GitHub Actions"
+            echo "docker"
+            return 0
+        elif command -v podman &> /dev/null; then
+            log_debug "Detected podman on GitHub Actions"
+            echo "podman"
+            return 0
+        fi
+    fi
+
     # Auto-detect available engines (prefer docker on macOS, podman on Linux)
     local platform
     platform=$(uname -s)
