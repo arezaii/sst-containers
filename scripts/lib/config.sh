@@ -106,7 +106,7 @@ get_container_image_name() {
             if [[ -z "$experiment_name" ]]; then
                 return 1
             fi
-            echo "sst-experiment/${experiment_name}"
+            echo "${experiment_name}"
             ;;
         *)
             return 1
@@ -139,17 +139,23 @@ detect_container_type_from_image_tag() {
         *"/sst-experiment/"*)
             echo "experiment"
             ;;
-        *"sst-custom:"*|*"sst-perf-track-custom:"*)
+        *"sst-perf-track-custom:"*|*"/sst-perf-track-custom:"*|*"sst-custom:"*|*"/sst-custom:"*)
             echo "custom"
             ;;
-        *"sst-dev:"*)
+        *"sst-perf-track-core:"*|*"/sst-perf-track-core:"*|*"sst-core:"*|*"/sst-core:"*)
+            echo "core"
+            ;;
+        *"sst-dev:"*|*"/sst-dev:"*)
             echo "dev"
             ;;
-        *"sst-full:"*|*"sst-perf-track-full:"*)
+        *"sst-perf-track-full:"*|*"/sst-perf-track-full:"*|*"sst-full:"*|*"/sst-full:"*)
             echo "full"
             ;;
         *)
-            echo "core"
+            # Experiment images are published directly under the experiment package
+            # name (for example ghcr.io/org/phold-example:latest) rather than under
+            # an sst-experiment/ namespace.
+            echo "experiment"
             ;;
     esac
 }
