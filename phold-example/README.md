@@ -5,7 +5,7 @@ This experiment pulls and builds the PHOLD benchmark from the sst-benchmarks rep
 ## Directory Structure
 
 ```
-example-experiment/
+phold-example/
 |-- README.md           # This file
 |-- run_simulation.sh   # Script to pull and build PHOLD benchmark
 `-- analyze_results.sh  # Post-processing script
@@ -17,13 +17,13 @@ Once the container is built using the "Build Experiment Container" workflow:
 
 ```bash
 # Pull the experiment container
-docker pull ghcr.io/ai-hpc-adv-dev/example-experiment:latest
+docker pull ghcr.io/hpc-ai-adv-dev/sst-experiment/phold-example:latest
 
 # Run the container
-docker run -it ghcr.io/ai-hpc-adv-dev/example-experiment:latest
+docker run -it ghcr.io/hpc-ai-adv-dev/sst-experiment/phold-example:latest
 
-# Inside the container, experiment files are in /experiments/example-experiment
-cd /experiments/example-experiment
+# Inside the container, experiment files are in /experiments/phold-example
+cd /experiments/phold-example
 
 # Build and run the PHOLD benchmark
 ./run_simulation.sh
@@ -42,9 +42,8 @@ cd /experiments/example-experiment
 1. Go to Actions > Build Experiment Container
 2. Click "Run workflow"
 3. Fill in the parameters:
-   - **experiment_name**: `example-experiment`
-   - **base_image_type**: Choose `sst-core` or `sst-full`
-   - **base_image_tag**: e.g., `15.1.0` or `latest`
-   - **base_image_arch**: `amd64` or `arm64`
+   - **experiment_name**: `phold-example`
+   - **base_image**: e.g., `ar-sst-core:latest` or `ghcr.io/hpc-ai-adv-dev/ar-sst-full:15.1.0`
+   - **build_platforms**: e.g., `linux/amd64` or `linux/amd64,linux/arm64`
    - **tag_suffix**: `latest` (or any custom tag)
 4. Click "Run workflow"
