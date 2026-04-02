@@ -49,23 +49,6 @@ get_arch() {
     esac
 }
 
-# Get platform-specific Docker build arguments
-get_platform_build_args() {
-    local target_platform="$1"
-
-    case "$target_platform" in
-        linux/amd64)
-            echo "--platform linux/amd64"
-            ;;
-        linux/arm64)
-            echo "--platform linux/arm64"
-            ;;
-        *)
-            log_error "Unsupported target platform: $target_platform"
-            return 1
-            ;;
-    esac
-}
 
 # Check if we can build for target platform locally
 can_build_platform() {
@@ -81,43 +64,6 @@ can_build_platform() {
         log_info "Cross-platform builds require GitHub Actions or emulation"
         return 1
     fi
-}
-
-# Get platform-specific resource limits
-get_platform_resources() {
-    local platform="$1"
-
-    case "$platform" in
-        linux/amd64)
-            # x86_64 typically has more resources available
-            echo "cpu=4 memory=8g"
-            ;;
-        linux/arm64)
-            # ARM64 might have different resource constraints
-            echo "cpu=4 memory=6g"
-            ;;
-        *)
-            # Default conservative limits
-            echo "cpu=2 memory=4g"
-            ;;
-    esac
-}
-
-# Generate platform-specific container tag
-generate_platform_tag() {
-    local registry="$1"
-    local image_name="$2"
-    local version="$3"
-    local platform="$4"
-
-    local arch
-    case "$platform" in
-        linux/amd64)  arch="amd64" ;;
-        linux/arm64)  arch="arm64" ;;
-        *)            arch="unknown" ;;
-    esac
-
-    echo "${registry}/${image_name}:${version}-${arch}"
 }
 
 # Validate platform specification
@@ -145,25 +91,9 @@ validate_platform() {
 }
 
 # Get list of supported platforms for this project
-get_supported_platforms() {
-    echo "linux/amd64 linux/arm64"
-}
-
-# Check if platform is supported
-is_platform_supported() {
-    local platform="$1"
-    local supported_platforms
-
-    supported_platforms=($(get_supported_platforms))
-
-    for supported in "${supported_platforms[@]}"; do
-        if [[ "$platform" == "$supported" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
+# get_supported_platforms() {
+#     echo "linux/amd64 linux/arm64"
+# }
 
 # Platform-specific container engine detection
 detect_container_engine() {
@@ -257,4 +187,18 @@ validate_container_engine() {
 
     log_group_end
     return 0
+}
+
+inspect_remote_manifest() {
+    local engine="$1"
+    local image_ref="$2"
+
+    case "$engine" in
+        podman)
+            "$engine" manifest inspect "docker://${image_ref}"
+            ;;
+        *)
+            "$engine" manifest inspect "$image_ref"
+            ;;
+    esac
 }

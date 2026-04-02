@@ -9,35 +9,16 @@ source "${SCRIPT_DIR}/../lib/init.sh"
 # Load simple argument parsing
 source "${SCRIPT_DIR}/../lib/simple-args.sh"
 
-# Set up script description and examples
-SCRIPT_DESCRIPTION="Custom SST Container Build Script
-
-Build SST containers from any Git repository and branch/tag/commit.
-Supports both core-only and full (core+elements) builds.
-
-Usage: $(basename "$0") [OPTIONS]
-
-Required Options:
-  --core-ref REF              SST-core branch, tag, or commit SHA"
-
-SCRIPT_EXAMPLES="  # Build SST-core from main branch
-  $(basename "$0") --core-ref main
-
-  # Build full SST from custom repositories
-  $(basename "$0") --core-ref v15.1.0 \\
-     --elements-repo https://github.com/custom/sst-elements.git \\
-     --elements-ref develop
-
-  # Build with performance tracking enabled
-  $(basename "$0") --core-ref main --enable-perf-tracking"
-
-# Parse arguments using simple framework
-parse_simple_arguments "$@"
+# Parse and normalize arguments using the shared CLI framework.
+if ! parse_script_arguments "custom-build" "none" "$@"; then
+    trap - EXIT ERR
+    exit 1
+fi
 
 # Handle help with cleanup trap disabled
 if [[ "$HELP_REQUESTED" == "true" ]]; then
     trap - EXIT ERR
-    show_simple_help
+    show_argument_profile_help "custom-build"
     exit 0
 fi
 
@@ -185,38 +166,43 @@ if [[ "$GITHUB_ACTIONS_MODE" == "true" ]] || is_github_actions; then
 fi
 
 # Validate container if requested
-if [[ "$VALIDATE" == "true" ]] || [[ "$VALIDATE_QUICK" == "true" ]] || [[ "$VALIDATE_NO_EXEC" == "true" ]]; then
+if [[ "$VALIDATION_MODE" != "none" ]]; then
     log_group_start "Validating Container"
 
     # Determine container type for validation
     VALIDATION_TYPE="custom"
     MAX_SIZE_MB=$(get_default_size_limit "custom")
 
-    if [[ "$VALIDATE_QUICK" == "true" ]]; then
-        # Quick validation - just check image exists and can be inspected
-        if quick_validate_image "$CONTAINER_ENGINE" "$IMAGE_TAG"; then
-            log_success "Quick container validation passed"
-        else
-            log_error "Quick container validation failed"
+    case "$VALIDATION_MODE" in
+        quick)
+            if quick_validate_image "$CONTAINER_ENGINE" "$IMAGE_TAG"; then
+                log_success "Quick container validation passed"
+            else
+                log_error "Quick container validation failed"
+                exit 1
+            fi
+            ;;
+        metadata)
+            if no_exec_validate_image "$CONTAINER_ENGINE" "$IMAGE_TAG" "$MAX_SIZE_MB"; then
+                log_success "Metadata-only container validation passed"
+            else
+                log_error "Metadata-only container validation failed"
+                exit 1
+            fi
+            ;;
+        full)
+            if validate_container "$CONTAINER_ENGINE" "$IMAGE_TAG" "$VALIDATION_TYPE" "$MAX_SIZE_MB"; then
+                log_success "Container validation passed"
+            else
+                log_error "Container validation failed"
+                exit 1
+            fi
+            ;;
+        *)
+            log_error "Unsupported validation mode: $VALIDATION_MODE"
             exit 1
-        fi
-    elif [[ "$VALIDATE_NO_EXEC" == "true" ]]; then
-        # No-exec validation - check image and metadata without running commands
-        if no_exec_validate_image "$CONTAINER_ENGINE" "$IMAGE_TAG" "$MAX_SIZE_MB"; then
-            log_success "No-exec container validation passed"
-        else
-            log_error "No-exec container validation failed"
-            exit 1
-        fi
-    else
-        # Full validation with platform awareness
-        if validate_container "$CONTAINER_ENGINE" "$IMAGE_TAG" "$VALIDATION_TYPE" "$MAX_SIZE_MB"; then
-            log_success "Container validation passed"
-        else
-            log_error "Container validation failed"
-            exit 1
-        fi
-    fi
+            ;;
+    esac
 
     log_group_end
 fi

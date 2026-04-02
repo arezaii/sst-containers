@@ -38,17 +38,17 @@ validate_required_args() {
     return 0
 }
 
-validate_file_exists() {
-    local file_path="$1"
-    local file_description="${2:-File}"
+# validate_file_exists() {
+#     local file_path="$1"
+#     local file_description="${2:-File}"
 
-    if [[ ! -f "$file_path" ]]; then
-        log_error "$file_description not found: $file_path"
-        return 1
-    fi
+#     if [[ ! -f "$file_path" ]]; then
+#         log_error "$file_description not found: $file_path"
+#         return 1
+#     fi
 
-    return 0
-}
+#     return 0
+# }
 
 validate_directory_exists() {
     local dir_path="$1"
@@ -147,23 +147,6 @@ validate_image_size() {
     else
         log_success "Image size check passed"
         return 0
-    fi
-}
-
-# Test container startup
-test_container_startup() {
-    local engine="$1"
-    local image_tag="$2"
-
-    log_info "Testing container startup"
-
-    # Use the correct format for the bash entrypoint
-    if "$engine" run --rm "$image_tag" -c 'echo "Container startup successful"' &> /dev/null; then
-        log_success "Container startup test passed"
-        return 0
-    else
-        log_error "Container startup test failed"
-        return 1
     fi
 }
 

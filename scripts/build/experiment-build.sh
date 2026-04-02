@@ -12,7 +12,6 @@ source "${SCRIPT_DIR}/../lib/simple-args.sh"
 # Default values using centralized config
 EXPERIMENT_NAME=""
 BASE_IMAGE="sst-core:latest"
-IMAGE_PREFIX="ghcr.io/$(whoami)"
 TAG_SUFFIX="latest"
 BUILD_PLATFORMS="linux/amd64"
 NO_CACHE=false
@@ -23,60 +22,13 @@ VALIDATION_MODE="full"
 declare -a BUILD_ARGS
 
 show_usage() {
-    cat << EOF
-Usage: $0 [OPTIONS] EXPERIMENT_NAME
-
-Build experiment containers for SST with optional custom Containerfiles.
-
-POSITIONAL ARGUMENTS:
-    EXPERIMENT_NAME                Experiment name (required) - must match existing directory
-
-OPTIONS:
-    --base-image IMAGE             Base image for experiment (if not using custom Containerfile)
-    --prefix PREFIX                Image prefix (default: ghcr.io/$(whoami))
-    --tag-suffix SUFFIX            Tag suffix (default: latest)
-    --platforms PLATFORMS          Build platforms (default: linux/amd64)
-    --no-cache                     Disable build cache
-    --registry REGISTRY            Registry for image tags (default: ghcr.io/$(whoami))
-    --validation MODE              Validation mode: full, quick, or no-exec (default: full)
-    --build-arg KEY=VALUE          Additional build arguments
-    --help                         Show this help message
-
-VALIDATION MODES:
-    full      Complete validation including size check and functionality tests
-    quick     Basic validation without execution tests
-    no-exec   No validation (build only)
-
-PERFORMANCE TRACKING:
-    Experiment containers inherit SST performance tracking from their base image.
-    Use performance-tracking enabled base images (e.g., "sst-perf-track-core:latest")
-    when you need performance tracking capabilities in your experiments.
-
-EXAMPLES:
-    # Build experiment with default base image
-    $0 phold-example
-
-    # Build experiment with custom base image
-    $0 --base-image sst-core:latest tcl-test-experiment
-
-    # Build for multiple platforms
-    $0 --platforms linux/amd64,linux/arm64 phold-example
-
-    # Build with custom registry and no cache
-    $0 --registry myregistry.io/user --no-cache ahp-graph-demo
-
-NOTES:
-    - Experiment directory must exist in project root
-    - If experiment contains Containerfile, it will be used directly
-    - Otherwise, Containerfiles/Containerfile.experiment is used as template
-    - Base image is validated for accessibility when using template
-
-EOF
+    show_argument_profile_help "experiment-build"
 }
 
 detect_experiment_containerfile_type() {
     local experiment_name="$1"
     local base_image="$2"
+    local container_engine="$3"
 
     log_info "Validating experiment configuration..."
 
@@ -97,7 +49,7 @@ detect_experiment_containerfile_type() {
 
         # Validate base image if using template
         if [ -n "$base_image" ]; then
-            validate_base_image "$base_image"
+            validate_base_image "$base_image" "$container_engine"
         fi
 
         echo "template"
@@ -107,6 +59,7 @@ detect_experiment_containerfile_type() {
 
 validate_base_image() {
     local base_image="$1"
+    local container_engine="${2:-${CONTAINER_ENGINE:-$(detect_container_engine)}}"
     local resolved_image
 
     log_info "Validating base image: $base_image"
@@ -116,7 +69,7 @@ validate_base_image() {
     log_info "Resolved base image: $resolved_image"
 
     # Check base image accessibility
-    if ! docker manifest inspect "$resolved_image" >/dev/null 2>&1; then
+    if ! inspect_remote_manifest "$container_engine" "$resolved_image" >/dev/null 2>&1; then
         log_error "Base image not found: $resolved_image"
         log_error "For images in this repository, use format: sst-core:latest"
         log_error "For external images, use full path: ghcr.io/username/image:tag"
@@ -187,16 +140,20 @@ build_experiment_container() {
 }
 
 main() {
-    log_info "Starting experiment container build..."
-
-    # Parse command line arguments using standardized framework
-    parse_simple_arguments "$@"
+    # Parse and normalize command line arguments using the shared CLI framework.
+    if ! parse_script_arguments "experiment-build" "full" "$@"; then
+        trap - EXIT ERR
+        exit 1
+    fi
 
     # Handle help request
     if [ "$HELP_REQUESTED" = "true" ]; then
+        trap - EXIT ERR
         show_usage
         exit 0
     fi
+
+    log_info "Starting experiment container build..."
 
     # Get experiment name from remaining args (first positional argument)
     if [ ${#REMAINING_ARGS[@]} -gt 0 ]; then
@@ -211,17 +168,6 @@ main() {
         exit 1
     fi
 
-    # Validate experiment-specific parameters
-    case "$VALIDATION_MODE" in
-        full|quick|no-exec)
-            ;;
-        *)
-            log_error "Invalid validation mode: $VALIDATION_MODE"
-            log_error "Valid modes: full, quick, no-exec"
-            exit 1
-            ;;
-    esac
-
     # Detect and validate container engine
     local container_engine="${CONTAINER_ENGINE:-$(detect_container_engine)}"
     if ! validate_container_engine "$container_engine"; then
@@ -231,7 +177,7 @@ main() {
 
     # Validate experiment and get containerfile type
     local containerfile_type
-    containerfile_type=$(detect_experiment_containerfile_type "$EXPERIMENT_NAME" "$BASE_IMAGE" | tail -1)
+    containerfile_type=$(detect_experiment_containerfile_type "$EXPERIMENT_NAME" "$BASE_IMAGE" "$container_engine" | tail -1)
 
     # Determine containerfile path and context
     local containerfile_path
@@ -278,42 +224,49 @@ main() {
     # Build the container
     build_experiment_container "experiment" "$containerfile_path" "$docker_context" "$tag_name" "$container_engine"
 
-    # Run validation if requested
-    if [ "$VALIDATION_MODE" != "no-exec" ]; then
-        log_info "Running container validation..."
+    # Run validation when requested.
+    case "$VALIDATION_MODE" in
+        none)
+            log_info "Skipping validation (validation mode: none)"
+            ;;
+        quick|metadata|full)
+            log_info "Running container validation..."
 
-        # Set appropriate size limit for experiments
-        local max_size_mb=$(get_default_size_limit "experiment")
+            # Set appropriate size limit for experiments
+            local max_size_mb=$(get_default_size_limit "experiment")
 
-        case "$VALIDATION_MODE" in
-            "quick")
-                if quick_validate_image "$container_engine" "$tag_name"; then
-                    log_success "Quick container validation passed"
-                else
-                    log_error "Quick container validation failed"
-                    exit 1
-                fi
-                ;;
-            "no-exec")
-                if no_exec_validate_image "$container_engine" "$tag_name" "$max_size_mb"; then
-                    log_success "No-exec container validation passed"
-                else
-                    log_error "No-exec container validation failed"
-                    exit 1
-                fi
-                ;;
-            "full"|*)
-                if validate_container "$container_engine" "$tag_name" "experiment" "$max_size_mb"; then
-                    log_success "Full container validation passed"
-                else
-                    log_error "Full container validation failed"
-                    exit 1
-                fi
-                ;;
-        esac
-    else
-        log_info "Skipping validation (no validation requested)"
-    fi
+            case "$VALIDATION_MODE" in
+                quick)
+                    if quick_validate_image "$container_engine" "$tag_name"; then
+                        log_success "Quick container validation passed"
+                    else
+                        log_error "Quick container validation failed"
+                        exit 1
+                    fi
+                    ;;
+                metadata)
+                    if no_exec_validate_image "$container_engine" "$tag_name" "$max_size_mb"; then
+                        log_success "Metadata-only container validation passed"
+                    else
+                        log_error "Metadata-only container validation failed"
+                        exit 1
+                    fi
+                    ;;
+                full)
+                    if validate_container "$container_engine" "$tag_name" "experiment" "$max_size_mb"; then
+                        log_success "Full container validation passed"
+                    else
+                        log_error "Full container validation failed"
+                        exit 1
+                    fi
+                    ;;
+            esac
+            ;;
+        *)
+            log_error "Unsupported validation mode: $VALIDATION_MODE"
+            exit 1
+            ;;
+    esac
 
     log_info "Experiment build completed successfully!"
 

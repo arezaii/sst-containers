@@ -10,30 +10,28 @@ if [[ -z "${SCRIPT_LIB_DIR:-}" ]]; then
 fi
 source "${SCRIPT_LIB_DIR}/logging.sh"
 
-# Track resources for cleanup (defensive initialization)
-if [[ -z "${CLEANUP_CONTAINERS_INITIALIZED:-}" ]]; then
+init_cleanup_tracking() {
+    if [[ -n "${CLEANUP_CONTAINERS_INITIALIZED:-}" ]]; then
+        return 0
+    fi
+
     declare -a CLEANUP_CONTAINERS=()
     declare -a CLEANUP_IMAGES=()
     declare -a CLEANUP_VOLUMES=()
     declare -a CLEANUP_FILES=()
     declare -a CLEANUP_DIRECTORIES=()
     export CLEANUP_CONTAINERS_INITIALIZED=true
-fi
+}
+
+# Track resources for cleanup (defensive initialization)
+init_cleanup_tracking
 
 # Signal handler for cleanup on exit
 cleanup_on_exit() {
     local exit_code=$?
     log_info "Starting cleanup process..."
 
-    # Initialize arrays if not already done
-    if [[ -z "${CLEANUP_CONTAINERS_INITIALIZED:-}" ]]; then
-        declare -a CLEANUP_CONTAINERS=()
-        declare -a CLEANUP_IMAGES=()
-        declare -a CLEANUP_VOLUMES=()
-        declare -a CLEANUP_FILES=()
-        declare -a CLEANUP_DIRECTORIES=()
-        export CLEANUP_CONTAINERS_INITIALIZED=true
-    fi
+    init_cleanup_tracking
 
     # Clean up containers
     if declare -p CLEANUP_CONTAINERS &>/dev/null && [ ${#CLEANUP_CONTAINERS[@]} -gt 0 ]; then
@@ -67,11 +65,6 @@ cleanup_on_exit() {
 
     log_info "Cleanup process completed"
     exit $exit_code
-}
-
-# Register cleanup handler
-register_cleanup_handler() {
-    trap cleanup_on_exit EXIT INT TERM
 }
 
 # Clean up containers
@@ -142,44 +135,49 @@ cleanup_directories() {
 
 
 
-# Clean up specific resource type immediately
-cleanup_resource_type() {
-    local resource_type="$1"
-
-    case "$resource_type" in
-        "containers")
-            if [ ${#CLEANUP_CONTAINERS[@]:-0} -gt 0 ]; then
-                cleanup_containers "${CLEANUP_CONTAINERS[@]}"
-                CLEANUP_CONTAINERS=()
-            fi
-            ;;
-        "images")
-            if [ ${#CLEANUP_IMAGES[@]:-0} -gt 0 ]; then
-                cleanup_images "${CLEANUP_IMAGES[@]}"
-                CLEANUP_IMAGES=()
-            fi
-            ;;
-        "volumes")
-            if [ ${#CLEANUP_VOLUMES[@]:-0} -gt 0 ]; then
-                cleanup_volumes "${CLEANUP_VOLUMES[@]}"
-                CLEANUP_VOLUMES=()
-            fi
-            ;;
-        "files")
-            if [ ${#CLEANUP_FILES[@]:-0} -gt 0 ]; then
-                cleanup_files "${CLEANUP_FILES[@]}"
-                CLEANUP_FILES=()
-            fi
-            ;;
-        "directories")
-            if [ ${#CLEANUP_DIRECTORIES[@]} -gt 0 ]; then
-                cleanup_directories "${CLEANUP_DIRECTORIES[@]}"
-                CLEANUP_DIRECTORIES=()
-            fi
-            ;;
-        *)
-            log_error "Unknown resource type: $resource_type"
-            return 1
-            ;;
-    esac
+# Register cleanup handler
+register_cleanup_handler() {
+    trap cleanup_on_exit EXIT INT TERM
 }
+
+# Clean up specific resource type immediately
+# cleanup_resource_type() {
+#     local resource_type="$1"
+
+#     case "$resource_type" in
+#         "containers")
+#             if [ ${#CLEANUP_CONTAINERS[@]:-0} -gt 0 ]; then
+#                 cleanup_containers "${CLEANUP_CONTAINERS[@]}"
+#                 CLEANUP_CONTAINERS=()
+#             fi
+#             ;;
+#         "images")
+#             if [ ${#CLEANUP_IMAGES[@]:-0} -gt 0 ]; then
+#                 cleanup_images "${CLEANUP_IMAGES[@]}"
+#                 CLEANUP_IMAGES=()
+#             fi
+#             ;;
+#         "volumes")
+#             if [ ${#CLEANUP_VOLUMES[@]:-0} -gt 0 ]; then
+#                 cleanup_volumes "${CLEANUP_VOLUMES[@]}"
+#                 CLEANUP_VOLUMES=()
+#             fi
+#             ;;
+#         "files")
+#             if [ ${#CLEANUP_FILES[@]:-0} -gt 0 ]; then
+#                 cleanup_files "${CLEANUP_FILES[@]}"
+#                 CLEANUP_FILES=()
+#             fi
+#             ;;
+#         "directories")
+#             if [ ${#CLEANUP_DIRECTORIES[@]} -gt 0 ]; then
+#                 cleanup_directories "${CLEANUP_DIRECTORIES[@]}"
+#                 CLEANUP_DIRECTORIES=()
+#             fi
+#             ;;
+#         *)
+#             log_error "Unknown resource type: $resource_type"
+#             return 1
+#             ;;
+#     esac
+# }

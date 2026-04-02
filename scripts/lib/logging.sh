@@ -111,13 +111,13 @@ log_error() {
 }
 
 # Fatal error (logs and exits)
-log_fatal() {
-    local message="$1"
-    local exit_code="${2:-1}"
+# log_fatal() {
+#     local message="$1"
+#     local exit_code="${2:-1}"
 
-    log_error "$message"
-    exit "$exit_code"
-}
+#     log_error "$message"
+#     exit "$exit_code"
+# }
 
 # Start a logical group of operations
 log_group_start() {
@@ -177,15 +177,15 @@ log_exec() {
 }
 
 # Progress indicator for long operations
-log_progress() {
-    local current="$1"
-    local total="$2"
-    local message="$3"
+# log_progress() {
+#     local current="$1"
+#     local total="$2"
+#     local message="$3"
 
-    if is_github_actions; then
-        log_info "[$current/$total] $message"
-    else
-        local percentage=$((current * 100 / total))
-        echo -e "${CYAN}[${percentage}%]${NC} $message"
-    fi
-}
+#     if is_github_actions; then
+#         log_info "[$current/$total] $message"
+#     else
+#         local percentage=$((current * 100 / total))
+#         echo -e "${CYAN}[${percentage}%]${NC} $message"
+#     fi
+# }

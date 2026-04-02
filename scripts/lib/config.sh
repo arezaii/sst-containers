@@ -41,9 +41,9 @@ get_config_value() {
     echo "${!var_name:-$default_value}"
 }
 
-get_registry_value() {
-    get_config_value "REGISTRY" "$DEFAULT_REGISTRY"
-}
+# get_registry_value() {
+#     get_config_value "REGISTRY" "$DEFAULT_REGISTRY"
+# }
 
 # Validate container type
 validate_container_type() {
@@ -136,7 +136,7 @@ detect_container_type_from_image_tag() {
     local image_tag="$1"
 
     case "$image_tag" in
-        *"sst-experiment/"*)
+        *"/sst-experiment/"*)
             echo "experiment"
             ;;
         *"sst-custom:"*|*"sst-perf-track-custom:"*)

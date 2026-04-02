@@ -21,9 +21,15 @@ source "${SCRIPT_DIR}/../lib/init.sh"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-}"
 BASE_IMAGE="${BASE_IMAGE:-sst-core:latest}"
 REPO_OWNER="${REPO_OWNER:-$(whoami)}"
+CONTAINER_ENGINE="${CONTAINER_ENGINE:-$(detect_container_engine)}"
 
 if [[ -z "$EXPERIMENT_NAME" ]]; then
     log_error "EXPERIMENT_NAME is required"
+    exit 1
+fi
+
+if ! validate_container_engine "$CONTAINER_ENGINE"; then
+    log_error "Container engine validation failed"
     exit 1
 fi
 
@@ -56,7 +62,7 @@ else
     set_output "resolved_base_image" "$RESOLVED_IMAGE"
 
     # Verify the base image is accessible in the registry
-    if docker manifest inspect "$RESOLVED_IMAGE" >/dev/null 2>&1; then
+    if inspect_remote_manifest "$CONTAINER_ENGINE" "$RESOLVED_IMAGE" >/dev/null 2>&1; then
         log_success "Base image is accessible: ${RESOLVED_IMAGE}"
     else
         log_error "Base image not found or not accessible: ${RESOLVED_IMAGE}"
