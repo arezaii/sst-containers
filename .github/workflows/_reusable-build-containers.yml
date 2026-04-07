@@ -351,7 +351,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload MPICH artifact (for caching across jobs)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true' && steps.check-mpich-artifact.outputs.artifact_exists != 'true'
         with:
           name: ${{ steps.check-mpich-artifact.outputs.artifact_name }}
@@ -382,7 +382,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload SST sources artifact (core-only)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: inputs.sst_version != '' && steps.cache-sst-core.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true' && steps.sst-cache-config.outputs.needs_elements == 'false'
         with:
           name: ${{ steps.check-sst-artifact.outputs.artifact_name }}
@@ -390,7 +390,7 @@ jobs:
           retention-days: 10
 
       - name: Upload SST sources artifact (full)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         if: inputs.sst_version != '' && steps.cache-sst-full.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true' && steps.sst-cache-config.outputs.needs_elements == 'true'
         with:
           name: ${{ steps.check-sst-artifact.outputs.artifact_name }}
