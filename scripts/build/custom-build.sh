@@ -72,9 +72,9 @@ if ! validate_platform "$TARGET_PLATFORM"; then
     exit 1
 fi
 
-# Check if we can build for target platform locally
-if ! can_build_platform "$TARGET_PLATFORM"; then
-    log_warning "Cross-platform build detected"
+# Local custom builds intentionally target only the host architecture.
+if ! require_host_platform "$TARGET_PLATFORM" "Target platform (--platform)"; then
+    exit 1
 fi
 
 # Determine build type and generate tag
@@ -92,7 +92,7 @@ if [[ "${TAG_SUFFIX_SET:-false}" != "true" ]]; then
 fi
 
 # Generate final image tag
-ARCH=$(get_arch)
+ARCH=$(platform_to_arch "$TARGET_PLATFORM")
 IMAGE_TAG=$(generate_container_image_tag "$REGISTRY" "custom" "$TAG_SUFFIX" "$ARCH" "$ENABLE_PERF_TRACKING")
 
 log_group_start "Custom SST Container Build"

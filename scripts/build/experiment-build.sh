@@ -9,15 +9,6 @@ source "${SCRIPT_DIR}/../lib/init.sh"
 # Load simple argument parsing
 source "${SCRIPT_DIR}/../lib/simple-args.sh"
 
-# Default values using centralized config
-EXPERIMENT_NAME=""
-BASE_IMAGE="sst-core:latest"
-TAG_SUFFIX="latest"
-BUILD_PLATFORMS="linux/amd64"
-NO_CACHE=false
-REGISTRY=$(get_config_value "REGISTRY" "$DEFAULT_REGISTRY")
-VALIDATION_MODE="full"
-
 # Build args that will be passed to container engine
 declare -a BUILD_ARGS
 
@@ -95,12 +86,8 @@ build_experiment_container() {
     # Build the container arguments
     local build_cmd=("$container_engine" "build")
 
-    # Add platform specification for multi-platform builds
-    if [[ "$BUILD_PLATFORMS" == *","* ]]; then
-        build_cmd+=("--platform" "$BUILD_PLATFORMS")
-    else
-        build_cmd+=("--platform" "$BUILD_PLATFORMS")
-    fi
+    # Experiment builds are currently restricted to the single host platform.
+    build_cmd+=("--platform" "$BUILD_PLATFORMS")
 
     # Add containerfile path
     build_cmd+=("-f" "$containerfile_path")
@@ -153,6 +140,10 @@ main() {
         exit 0
     fi
 
+    if ! require_single_host_platform "$BUILD_PLATFORMS" "Build platforms (--platforms)"; then
+        exit 1
+    fi
+
     log_info "Starting experiment container build..."
 
     # Get experiment name from remaining args (first positional argument)
@@ -200,7 +191,8 @@ main() {
     fi
 
     # Build tag name
-    local arch=$(get_arch)
+    local arch
+    arch=$(platform_to_arch "$BUILD_PLATFORMS")
     local tag_name
     tag_name=$(generate_container_image_tag "$REGISTRY" "experiment" "$TAG_SUFFIX" "$arch" "false" "$EXPERIMENT_NAME")
 

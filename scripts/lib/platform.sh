@@ -49,6 +49,24 @@ get_arch() {
     esac
 }
 
+platform_to_arch() {
+    local platform="$1"
+
+    case "$platform" in
+        linux/amd64)
+            echo "amd64"
+            ;;
+        linux/arm64)
+            echo "arm64"
+            ;;
+        *)
+            log_error "Invalid platform: $platform"
+            log_error "Valid platforms: linux/amd64, linux/arm64"
+            return 1
+            ;;
+    esac
+}
+
 
 # Check if we can build for target platform locally
 can_build_platform() {
@@ -64,6 +82,38 @@ can_build_platform() {
         log_info "Cross-platform builds require GitHub Actions or emulation"
         return 1
     fi
+}
+
+require_host_platform() {
+    local target_platform="$1"
+    local option_label="${2:-Target platform}"
+    local current_platform
+
+    current_platform=$(detect_platform)
+
+    if [[ "$target_platform" != "$current_platform" ]]; then
+        log_error "$option_label must match the host platform: ${current_platform}"
+        log_error "Cross-platform builds are not supported by this script"
+        return 1
+    fi
+
+    return 0
+}
+
+require_single_host_platform() {
+    local target_platforms="$1"
+    local option_label="${2:-Target platforms}"
+    local current_platform
+
+    current_platform=$(detect_platform)
+
+    if [[ "$target_platforms" == *","* ]]; then
+        log_error "$option_label must be a single platform matching the host platform: ${current_platform}"
+        log_error "Multi-platform builds are not supported by this script"
+        return 1
+    fi
+
+    require_host_platform "$target_platforms" "$option_label"
 }
 
 # Validate platform specification

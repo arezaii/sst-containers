@@ -193,6 +193,45 @@ resolve_base_image_reference() {
     echo "ghcr.io/${default_owner}/${base_image}"
 }
 
+inspect_manifest_ref() {
+    local image_ref="$1"
+    local inspect_bin="${2:-${MANIFEST_INSPECT_BIN:-docker}}"
+
+    "$inspect_bin" manifest inspect "$image_ref" >/dev/null 2>&1
+}
+
+collect_verified_manifest_images() {
+    local manifest_tag="$1"
+    local platforms="$2"
+    local inspect_bin="${3:-${MANIFEST_INSPECT_BIN:-docker}}"
+    local verified_images="[]"
+
+    if [[ -z "$manifest_tag" ]]; then
+        echo "[]"
+        return 0
+    fi
+
+    if [[ -z "$platforms" ]]; then
+        echo "[]"
+        return 0
+    fi
+
+    IFS=',' read -ra platform_array <<< "$platforms"
+
+    for platform in "${platform_array[@]}"; do
+        local arch="${platform#linux/}"
+        local temp_tag="${manifest_tag}-${arch}"
+
+        if inspect_manifest_ref "$temp_tag" "$inspect_bin"; then
+            verified_images=$(echo "$verified_images" | jq -c --arg tag "$temp_tag" '. += [$tag]')
+        else
+            echo "WARNING: Skipping missing platform image ${temp_tag}" >&2
+        fi
+    done
+
+    echo "$verified_images"
+}
+
 # Generate latest tagging information from built images JSON
 # Returns JSON array with latest tag information for each unique image base
 generate_latest_tagging_info() {

@@ -69,7 +69,11 @@ init_argument_defaults() {
     EXPERIMENT_NAME=""
     BASE_IMAGE="sst-core:latest"
     TAG_SUFFIX="latest"
-    BUILD_PLATFORMS="linux/amd64"
+    if declare -F detect_platform >/dev/null; then
+        BUILD_PLATFORMS="$(detect_platform)"
+    else
+        BUILD_PLATFORMS="linux/amd64"
+    fi
     VALIDATION_MODE=""
 }
 
@@ -77,16 +81,42 @@ record_parsed_option() {
     local canonical_option="$1"
     local existing_option
 
-    for existing_option in "${PARSED_CANONICAL_OPTIONS[@]-}"; do
-        if [[ "$existing_option" == "$canonical_option" ]]; then
-            return 0
-        fi
-    done
+    if [[ ${#PARSED_CANONICAL_OPTIONS[@]} -gt 0 ]]; then
+        for existing_option in "${PARSED_CANONICAL_OPTIONS[@]}"; do
+            if [[ "$existing_option" == "$canonical_option" ]]; then
+                return 0
+            fi
+        done
+    fi
 
     PARSED_CANONICAL_OPTIONS+=("$canonical_option")
 }
 
+canonicalize_container_engine() {
+    local raw_engine="$1"
+
+    case "$raw_engine" in
+        docker|podman)
+            echo "$raw_engine"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 normalize_container_engine_argument() {
+    local explicit_engine="${CONTAINER_ENGINE:-}"
+
+    if [[ -n "$explicit_engine" ]]; then
+        if ! explicit_engine=$(canonicalize_container_engine "$explicit_engine"); then
+            log_error "Invalid container engine: $CONTAINER_ENGINE"
+            log_error "Valid engines: docker, podman"
+            return 1
+        fi
+        CONTAINER_ENGINE="$explicit_engine"
+    fi
+
     return 0
 }
 
@@ -170,7 +200,9 @@ validate_argument_profile() {
     local profile="$1"
     local option
 
-    for option in "${PARSED_CANONICAL_OPTIONS[@]-}"; do
+    [[ ${#PARSED_CANONICAL_OPTIONS[@]} -eq 0 ]] && return 0
+
+    for option in "${PARSED_CANONICAL_OPTIONS[@]}"; do
         if ! is_option_supported_for_profile "$profile" "$option"; then
             log_error "Unsupported option for $profile: $option"
             return 1
@@ -227,10 +259,10 @@ print_profile_option_help() {
             printf '    --no-cache                     Disable build cache\n'
             ;;
         --platform)
-            printf '    --platform PLATFORM            Target platform (default: auto-detected)\n'
+            printf '    --platform PLATFORM            Target platform (host platform only; default: auto-detected)\n'
             ;;
         --platforms)
-            printf '    --platforms PLATFORMS          Build platforms (default: %s)\n' "$BUILD_PLATFORMS"
+            printf '    --platforms PLATFORMS          Build platform (single host platform only; default: %s)\n' "$BUILD_PLATFORMS"
             ;;
         --registry)
             printf '    --registry REGISTRY            Registry for image tags (default: %s)\n' "$REGISTRY"
@@ -337,11 +369,11 @@ Performance tracking:
 Examples:
   $script_name phold-example
   $script_name --base-image sst-core:latest tcl-test-experiment
-  $script_name --platforms linux/amd64,linux/arm64 phold-example
   $script_name --registry myregistry.io/user --no-cache ahp-graph
 
 Notes:
     - Experiment directory must exist in project root
+        - Local experiment builds support only a single host-matching platform
     - If the experiment contains Containerfile, it will be used directly
     - Otherwise, Containerfiles/Containerfile.experiment is used as a template
     - Base images are validated for accessibility when using the template flow

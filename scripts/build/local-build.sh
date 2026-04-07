@@ -4,10 +4,9 @@
 # Use standardized initialization
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/init.sh"
-REPO_ROOT="$PROJECT_ROOT"
 
 # Change to repository root so relative paths work correctly
-cd "${REPO_ROOT}"
+cd "${PROJECT_ROOT}"
 
 # Load simple argument parsing
 source "${SCRIPT_DIR}/../lib/simple-args.sh"
@@ -16,9 +15,6 @@ source "${SCRIPT_DIR}/../lib/simple-args.sh"
 REGISTRY=$(get_config_value "REGISTRY" "$DEFAULT_REGISTRY")
 BUILD_NCPUS=$(get_config_value "BUILD_NCPUS" "$DEFAULT_BUILD_NCPUS")
 PLATFORM=$(uname -m)
-
-# Auto-detect container engine if not specified
-CONTAINER_ENGINE=$(detect_container_engine || echo "podman")
 
 # Use centralized configuration values
 DEFAULT_SST_VERSION=$(get_config_value "SST_VERSION" "$DEFAULT_SST_VERSION")
@@ -39,7 +35,6 @@ fi
 
 # Extract container type from remaining arguments
 CONTAINER_TYPE=""
-# Use more compatible approach instead of mapfile
 while IFS= read -r arg; do
     case "$arg" in
         core|full|dev|custom|experiment)
@@ -58,7 +53,7 @@ if ! validate_required_args "CONTAINER_TYPE" "$CONTAINER_TYPE" "Container type";
     exit 1
 fi
 
-if ! validate_container_type "$CONTAINER_TYPE" "${VALID_CONTAINER_TYPES[@]}"; then
+if ! validate_container_type "$CONTAINER_TYPE"; then
     log_error "Valid types: ${VALID_CONTAINER_TYPES[*]}"
     exit 1
 fi
@@ -79,7 +74,7 @@ fi
 # Set up remaining configuration
 REGISTRY="${REGISTRY:-$DEFAULT_REGISTRY}"
 BUILD_NCPUS="${BUILD_NCPUS:-$DEFAULT_BUILD_NCPUS}"
-CONTAINER_ENGINE="${CONTAINER_ENGINE:-$(detect_container_engine || echo "podman")}"
+CONTAINER_ENGINE="${CONTAINER_ENGINE:-$(detect_container_engine)}"
 
 if [[ "$VALIDATE_ONLY" == "true" ]] && [[ "$VALIDATION_MODE" == "none" ]]; then
     log_error "--validate-only requires a validation mode other than none"
@@ -106,6 +101,10 @@ case "$PLATFORM" in
         ;;
 esac
 
+if ! require_host_platform "$DOCKER_PLATFORM" "Target platform (--platform)"; then
+    exit 1
+fi
+
 # Validate container engine
 if ! validate_container_engine "$CONTAINER_ENGINE"; then
     log_error "Container engine validation failed"
@@ -128,14 +127,14 @@ download_sources() {
     log_info "Downloading source files..."
 
     # Delegate to canonical download script for consistency
-    local download_script="${REPO_ROOT}/scripts/build/download_tarballs.sh"
+    local download_script="${PROJECT_ROOT}/scripts/build/download_tarballs.sh"
 
     if [[ ! -x "$download_script" ]]; then
         log_error "Download script not found: $download_script"
         exit 1
     fi
 
-    cd "${REPO_ROOT}/Containerfiles"
+    cd "${PROJECT_ROOT}/Containerfiles"
     case "$CONTAINER_TYPE" in
         "core")
             "$download_script" --force --sst-version "$SST_VERSION" --mpich-version "$MPICH_VERSION"
@@ -164,7 +163,7 @@ download_sources() {
             exit 1
             ;;
     esac
-    cd ..
+    cd "${PROJECT_ROOT}"
 
     log_success "Source files ready"
 }
@@ -173,14 +172,14 @@ download_sources() {
 build_container() {
     local containerfile=""
     local build_target=""
-    local context="${REPO_ROOT}/Containerfiles"
+    local context="${PROJECT_ROOT}/Containerfiles"
     local tag_name=""
     local build_args=()
 
     # Configure build parameters based on container type
     case "$CONTAINER_TYPE" in
         "core")
-            containerfile="${REPO_ROOT}/Containerfiles/Containerfile"
+            containerfile="${PROJECT_ROOT}/Containerfiles/Containerfile"
             build_target="sst-core"
             local core_tag_suffix="$SST_VERSION"
             if [[ "${TAG_SUFFIX_SET:-false}" == "true" ]]; then
@@ -194,7 +193,7 @@ build_container() {
             )
             ;;
         "full")
-            containerfile="${REPO_ROOT}/Containerfiles/Containerfile"
+            containerfile="${PROJECT_ROOT}/Containerfiles/Containerfile"
             build_target="sst-full"
             # Generate descriptive tag name for mixed versions
             local tag_base="$SST_VERSION"
@@ -218,7 +217,7 @@ build_container() {
             fi
             ;;
         "dev")
-            containerfile="${REPO_ROOT}/Containerfiles/Containerfile.dev"
+            containerfile="${PROJECT_ROOT}/Containerfiles/Containerfile.dev"
             local dev_tag_suffix="latest"
             if [[ "${TAG_SUFFIX_SET:-false}" == "true" ]]; then
                 dev_tag_suffix="$TAG_SUFFIX"
@@ -232,7 +231,7 @@ build_container() {
         "custom")
             local build_suffix=""
 
-            containerfile="${REPO_ROOT}/Containerfiles/Containerfile.tag"
+            containerfile="${PROJECT_ROOT}/Containerfiles/Containerfile.tag"
             if ! validate_required_args "SST_CORE_REF" "$SST_CORE_REF" "SST-core reference (--core-ref)"; then
                 exit 1
             fi
@@ -241,7 +240,7 @@ build_container() {
                 SST_ELEMENTS_REPO="$DEFAULT_SST_ELEMENTS_REPO"
             fi
 
-            if [ -n "$SST_ELEMENTS_REPO" ] || [ -n "$SST_ELEMENTS_REF" ]; then
+            if [[ -n "$SST_ELEMENTS_REPO" || -n "$SST_ELEMENTS_REF" ]]; then
                 build_target="full-build"
                 build_suffix="${SST_CORE_REF}-full"
                 build_args+=(
@@ -267,13 +266,13 @@ build_container() {
             )
             ;;
         "experiment")
-            if [ -z "$EXPERIMENT_NAME" ]; then
+            if [[ -z "$EXPERIMENT_NAME" ]]; then
                 log_error "Experiment builds require --experiment-name"
                 exit 1
             fi
             # Delegate to experiment-build.sh so Containerfile detection and
             # build logic is exercised from the canonical implementation.
-            local exp_build_script="${REPO_ROOT}/scripts/build/experiment-build.sh"
+            local exp_build_script="${PROJECT_ROOT}/scripts/build/experiment-build.sh"
             local exp_args=(
                 "$EXPERIMENT_NAME"
                 "--registry" "$REGISTRY"
@@ -281,8 +280,8 @@ build_container() {
                 "--platforms" "$DOCKER_PLATFORM"
                 "--validation" "none"
             )
-            [ -n "$BASE_IMAGE" ] && exp_args+=("--base-image" "$BASE_IMAGE")
-            [ "$NO_CACHE" = true ] && exp_args+=("--no-cache")
+            [[ -n "$BASE_IMAGE" ]] && exp_args+=("--base-image" "$BASE_IMAGE")
+            [[ "$NO_CACHE" == "true" ]] && exp_args+=("--no-cache")
 
             "$exp_build_script" "${exp_args[@]}"
 
@@ -294,12 +293,12 @@ build_container() {
     esac
 
     # Add perf tracking build argument if enabled (only for core, full, custom)
-    if [ "$ENABLE_PERF_TRACKING" = true ] && [[ "$CONTAINER_TYPE" =~ ^(core|full|custom)$ ]]; then
+    if [[ "$ENABLE_PERF_TRACKING" == "true" && "$CONTAINER_TYPE" =~ ^(core|full|custom)$ ]]; then
         build_args+=("--build-arg" "ENABLE_PERF_TRACKING=1")
     fi
 
     # Add no-cache flag if requested
-    if [ "$NO_CACHE" = true ]; then
+    if [[ "$NO_CACHE" == "true" ]]; then
         build_args+=("--no-cache")
     fi
 
@@ -308,7 +307,7 @@ build_container() {
 
     log_info "Building container: $tag_name"
     log_info "Using containerfile: $containerfile"
-    if [ -n "$build_target" ]; then
+    if [[ -n "$build_target" ]]; then
         log_info "Build target: $build_target"
         build_args+=("--target" "$build_target")
     fi
@@ -331,11 +330,11 @@ validate_built_container() {
     local tag_name="${1:-}"
     local max_size_mb
 
-    if [ -z "$tag_name" ] && [ -f ".last_built_image" ]; then
+    if [[ -z "$tag_name" ]] && [[ -f ".last_built_image" ]]; then
         tag_name=$(cat .last_built_image)
     fi
 
-    if [ -z "$tag_name" ]; then
+    if [[ -z "$tag_name" ]]; then
         log_error "No image tag specified for validation"
         exit 1
     fi
@@ -385,7 +384,7 @@ validate_built_container() {
 cleanup() {
     log_info "Cleaning up..."
 
-    if [ -f ".last_built_image" ]; then
+    if [[ -f ".last_built_image" ]]; then
         local tag_name
         tag_name=$(cat .last_built_image)
         log_info "Removing image: $tag_name"
@@ -411,9 +410,9 @@ run_build_sequence() {
     log_info "Starting local build sequence..."
 
     # Only download and build if not validate-only mode
-    if [ "$VALIDATE_ONLY" != true ]; then
+    if [[ "$VALIDATE_ONLY" != "true" ]]; then
         # Pre-build checks
-        if ! [ -d "${REPO_ROOT}/Containerfiles" ]; then
+        if [[ ! -d "${PROJECT_ROOT}/Containerfiles" ]]; then
             log_error "Containerfiles directory not found. Please run from project root."
             exit 1
         fi
@@ -429,11 +428,11 @@ run_build_sequence() {
     validate_built_container
 
     # Cleanup if requested
-    if [ "$CLEANUP" = true ]; then
+    if [[ "$CLEANUP" == "true" ]]; then
         cleanup
     else
         log_info "Image preserved. Use --cleanup to remove after the build."
-        if [ -f ".last_built_image" ]; then
+        if [[ -f ".last_built_image" ]]; then
             local tag_name
             tag_name=$(cat .last_built_image)
             log_info "Built image: $tag_name"

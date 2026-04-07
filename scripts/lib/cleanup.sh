@@ -15,11 +15,11 @@ init_cleanup_tracking() {
         return 0
     fi
 
-    declare -a CLEANUP_CONTAINERS=()
-    declare -a CLEANUP_IMAGES=()
-    declare -a CLEANUP_VOLUMES=()
-    declare -a CLEANUP_FILES=()
-    declare -a CLEANUP_DIRECTORIES=()
+    CLEANUP_CONTAINERS=()
+    CLEANUP_IMAGES=()
+    CLEANUP_VOLUMES=()
+    CLEANUP_FILES=()
+    CLEANUP_DIRECTORIES=()
     export CLEANUP_CONTAINERS_INITIALIZED=true
 }
 
@@ -75,7 +75,7 @@ cleanup_containers() {
         engine="${entry%%:*}"
         container_name="${entry#*:}"
 
-        if "$engine" container exists "$container_name" 2>/dev/null; then
+        if "$engine" container inspect "$container_name" &>/dev/null; then
             log_debug "Stopping and removing container: $container_name"
             "$engine" container stop "$container_name" 2>/dev/null || true
             "$engine" container rm "$container_name" 2>/dev/null || true
@@ -91,7 +91,7 @@ cleanup_images() {
         engine="${entry%%:*}"
         image_tag="${entry#*:}"
 
-        if "$engine" image exists "$image_tag" 2>/dev/null; then
+        if "$engine" image inspect "$image_tag" &>/dev/null; then
             log_debug "Removing image: $image_tag"
             "$engine" image rm "$image_tag" 2>/dev/null || true
         fi
@@ -106,7 +106,7 @@ cleanup_volumes() {
         engine="${entry%%:*}"
         volume_name="${entry#*:}"
 
-        if "$engine" volume exists "$volume_name" 2>/dev/null; then
+        if "$engine" volume inspect "$volume_name" &>/dev/null; then
             log_debug "Removing volume: $volume_name"
             "$engine" volume rm "$volume_name" 2>/dev/null || true
         fi

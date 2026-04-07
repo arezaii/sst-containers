@@ -410,6 +410,9 @@ jobs:
       built_images: ${{ steps.manifest.outputs.built_images }}
       manifest_tag: ${{ steps.manifest.outputs.manifest_tag }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -442,25 +445,22 @@ jobs:
 
           echo "Creating manifest: ${MANIFEST_TAG}"
 
-          IFS=',' read -ra PLATFORM_ARRAY <<< "$PLATFORMS"
-          MANIFESTS=""
-          IMAGES="[]"
+          source scripts/lib/config.sh
 
-          for platform in "${PLATFORM_ARRAY[@]}"; do
-            ARCH="${platform#linux/}"
-            TEMP_TAG="${MANIFEST_TAG}-${ARCH}"
-            IMAGES=$(echo "$IMAGES" | jq -c --arg tag "$TEMP_TAG" '. += [$tag]')
+          IMAGES=$(collect_verified_manifest_images "${MANIFEST_TAG}" "$PLATFORMS")
 
-            if docker manifest inspect "${TEMP_TAG}" >/dev/null 2>&1; then
-              MANIFESTS="$MANIFESTS ${TEMP_TAG}"
+          MANIFESTS=()
+          while IFS= read -r manifest_ref; do
+            if [ -n "$manifest_ref" ]; then
+              MANIFESTS+=("$manifest_ref")
             fi
-          done
+          done < <(echo "$IMAGES" | jq -r '.[]')
 
           echo "built_images=${IMAGES}" >> $GITHUB_OUTPUT
 
-          if [ -n "$MANIFESTS" ]; then
+          if [ ${#MANIFESTS[@]} -gt 0 ]; then
             echo "Creating multi-arch manifest: ${MANIFEST_TAG}"
-            docker buildx imagetools create --tag "${MANIFEST_TAG}" $MANIFESTS
+            docker buildx imagetools create --tag "${MANIFEST_TAG}" "${MANIFESTS[@]}"
             echo "manifest_tag=${MANIFEST_TAG}" >> $GITHUB_OUTPUT
           else
             echo "ERROR: No images found for manifest creation"

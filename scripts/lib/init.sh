@@ -11,7 +11,8 @@ set -euo pipefail
 
 # Calculate script directories (works from any depth in the project)
 if [[ -z "${SCRIPT_DIR:-}" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
+    SOURCE_PATH="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+    SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
 fi
 
 # Find the project root by looking for characteristic files
@@ -65,14 +66,8 @@ init_script_environment() {
         exit 1
     fi
 
-    # Temporarily disable errexit for library initialization to handle array initialization issues
-    set +e
-
     # Source all libraries
     source_libraries "$SCRIPT_LIB_DIR"
-
-    # Re-enable strict error handling
-    set -e
 
     # Register cleanup handler
     register_cleanup_handler
