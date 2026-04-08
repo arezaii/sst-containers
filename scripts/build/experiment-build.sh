@@ -126,6 +126,29 @@ build_experiment_container() {
     return 0
 }
 
+run_python_experiment_build() {
+    local serialized_build_args=""
+    local python_bin="${PYTHON_BIN:-python3}"
+
+    if [ ${#BUILD_ARGS[@]} -gt 0 ]; then
+        serialized_build_args=$(printf '%s\n' "${BUILD_ARGS[@]}")
+    fi
+
+    export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+
+    env \
+        EXPERIMENT_NAME="$EXPERIMENT_NAME" \
+        BASE_IMAGE="$BASE_IMAGE" \
+        BUILD_PLATFORMS="$BUILD_PLATFORMS" \
+        REGISTRY="$REGISTRY" \
+        TAG_SUFFIX="$TAG_SUFFIX" \
+        VALIDATION_MODE="$VALIDATION_MODE" \
+        NO_CACHE="$NO_CACHE" \
+        CONTAINER_ENGINE="$container_engine" \
+        BUILD_ARGS_SERIALIZED="$serialized_build_args" \
+        "$python_bin" -m sst_container_factory.cli experiment-build
+}
+
 main() {
     # Parse and normalize command line arguments using the shared CLI framework.
     if ! parse_script_arguments "experiment-build" "full" "$@"; then
@@ -166,112 +189,8 @@ main() {
         exit 1
     fi
 
-    # Validate experiment and get containerfile type
-    local containerfile_type
-    containerfile_type=$(detect_experiment_containerfile_type "$EXPERIMENT_NAME" "$BASE_IMAGE" "$container_engine" | tail -1)
-
-    # Determine containerfile path and context
-    local containerfile_path
-    local docker_context
-
-    if [ "$containerfile_type" = "custom" ]; then
-        containerfile_path="$PROJECT_ROOT/$EXPERIMENT_NAME/Containerfile"
-        docker_context="$PROJECT_ROOT/$EXPERIMENT_NAME"
-        # No base image build args needed for custom Containerfile
-    else
-        containerfile_path="$PROJECT_ROOT/Containerfiles/Containerfile.experiment"
-        docker_context="$PROJECT_ROOT/$EXPERIMENT_NAME"
-
-        # Add base image as build arg if specified
-        if [ -n "$BASE_IMAGE" ]; then
-            local resolved_base_image
-            resolved_base_image=$(resolve_base_image_reference "$BASE_IMAGE")
-            BUILD_ARGS+=("BASE_IMAGE=$resolved_base_image")
-        fi
-    fi
-
-    # Build tag name
-    local arch
-    arch=$(platform_to_arch "$BUILD_PLATFORMS")
-    local tag_name
-    tag_name=$(generate_container_image_tag "$REGISTRY" "experiment" "$TAG_SUFFIX" "$arch" "false" "$EXPERIMENT_NAME")
-
-    log_info "Configuration:"
-    log_info "  Experiment: $EXPERIMENT_NAME"
-    log_info "  Container type: experiment"
-    log_info "  Containerfile type: $containerfile_type"
-    log_info "  Containerfile path: $containerfile_path"
-    log_info "  Docker context: $docker_context"
-    log_info "  Tag: $tag_name"
-    log_info "  Platforms: $BUILD_PLATFORMS"
-    log_info "  Validation: $VALIDATION_MODE"
-
-    if [ ${#BUILD_ARGS[@]} -gt 0 ]; then
-        log_info "  Build args:"
-        for arg in "${BUILD_ARGS[@]}"; do
-            log_info "    $arg"
-        done
-    fi
-
-    # Build the container
-    build_experiment_container "experiment" "$containerfile_path" "$docker_context" "$tag_name" "$container_engine"
-
-    # Run validation when requested.
-    case "$VALIDATION_MODE" in
-        none)
-            log_info "Skipping validation (validation mode: none)"
-            ;;
-        quick|metadata|full)
-            log_info "Running container validation..."
-
-            # Set appropriate size limit for experiments
-            local max_size_mb=$(get_default_size_limit "experiment")
-
-            case "$VALIDATION_MODE" in
-                quick)
-                    if quick_validate_image "$container_engine" "$tag_name"; then
-                        log_success "Quick container validation passed"
-                    else
-                        log_error "Quick container validation failed"
-                        exit 1
-                    fi
-                    ;;
-                metadata)
-                    if no_exec_validate_image "$container_engine" "$tag_name" "$max_size_mb"; then
-                        log_success "Metadata-only container validation passed"
-                    else
-                        log_error "Metadata-only container validation failed"
-                        exit 1
-                    fi
-                    ;;
-                full)
-                    if validate_container "$container_engine" "$tag_name" "experiment" "$max_size_mb"; then
-                        log_success "Full container validation passed"
-                    else
-                        log_error "Full container validation failed"
-                        exit 1
-                    fi
-                    ;;
-            esac
-            ;;
-        *)
-            log_error "Unsupported validation mode: $VALIDATION_MODE"
-            exit 1
-            ;;
-    esac
-
-    log_info "Experiment build completed successfully!"
-
-    # Create job summary for GitHub Actions
-    if is_github_actions; then
-        create_job_summary "## [SUCCESS] Experiment Build Successful
-
-**Container:** \`$tag_name\`
-**Experiment:** \`$EXPERIMENT_NAME\`
-**Containerfile Type:** \`$containerfile_type\`
-**Validation:** \`$VALIDATION_MODE\`
-
-Build completed successfully!"
+    if ! run_python_experiment_build; then
+        exit 1
     fi
 
     return 0
