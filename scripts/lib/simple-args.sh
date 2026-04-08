@@ -8,6 +8,7 @@ set -euo pipefail
 SST_VERSION=""
 MPICH_VERSION=""
 SST_CORE_REPO=""
+SST_CORE_PATH=""
 SST_CORE_REF=""
 SST_ELEMENTS_REPO=""
 SST_ELEMENTS_REF=""
@@ -46,6 +47,7 @@ init_argument_defaults() {
     SST_VERSION="${DEFAULT_SST_VERSION:-15.1.2}"
     MPICH_VERSION="${DEFAULT_MPICH_VERSION:-4.0.2}"
     SST_CORE_REPO="${DEFAULT_SST_CORE_REPO:-https://github.com/sstsimulator/sst-core.git}"
+    SST_CORE_PATH=""
     SST_ELEMENTS_REPO=""
     SST_ELEMENTS_REF=""
     SST_ELEMENTS_VERSION=""
@@ -182,13 +184,13 @@ is_option_supported_for_profile() {
     local option="$2"
 
     case "$profile:$option" in
-        custom-build:--help|custom-build:--core-repo|custom-build:--core-ref|custom-build:--elements-repo|custom-build:--elements-ref|custom-build:--mpich-version|custom-build:--engine|custom-build:--platform|custom-build:--build-ncpus|custom-build:--registry|custom-build:--tag-suffix|custom-build:--enable-perf-tracking|custom-build:--no-cache|custom-build:--validation)
+        custom-build:--help|custom-build:--core-repo|custom-build:--core-path|custom-build:--core-ref|custom-build:--elements-repo|custom-build:--elements-ref|custom-build:--mpich-version|custom-build:--engine|custom-build:--platform|custom-build:--build-ncpus|custom-build:--registry|custom-build:--tag-suffix|custom-build:--enable-perf-tracking|custom-build:--no-cache|custom-build:--validation)
             return 0
             ;;
         experiment-build:--help|experiment-build:--base-image|experiment-build:--engine|experiment-build:--registry|experiment-build:--tag-suffix|experiment-build:--platforms|experiment-build:--no-cache|experiment-build:--build-arg|experiment-build:--validation)
             return 0
             ;;
-        local-build:--help|local-build:--sst-version|local-build:--mpich-version|local-build:--core-repo|local-build:--core-ref|local-build:--elements-repo|local-build:--elements-ref|local-build:--elements-version|local-build:--experiment-name|local-build:--base-image|local-build:--engine|local-build:--platform|local-build:--build-ncpus|local-build:--registry|local-build:--tag-suffix|local-build:--enable-perf-tracking|local-build:--no-cache|local-build:--validation|local-build:--validate-only|local-build:--cleanup)
+        local-build:--help|local-build:--sst-version|local-build:--mpich-version|local-build:--core-repo|local-build:--core-path|local-build:--core-ref|local-build:--elements-repo|local-build:--elements-ref|local-build:--elements-version|local-build:--experiment-name|local-build:--base-image|local-build:--engine|local-build:--platform|local-build:--build-ncpus|local-build:--registry|local-build:--tag-suffix|local-build:--enable-perf-tracking|local-build:--no-cache|local-build:--validation|local-build:--validate-only|local-build:--cleanup)
             return 0
             ;;
     esac
@@ -230,6 +232,9 @@ print_profile_option_help() {
             ;;
         --core-repo)
             printf '    --core-repo URL                SST-core repository URL\n'
+            ;;
+        --core-path)
+            printf '    --core-path PATH               Local SST-core checkout to copy into the build context\n'
             ;;
         --elements-ref)
             printf '    --elements-ref REF             SST-elements branch, tag, or commit SHA\n'
@@ -303,6 +308,7 @@ Usage: $script_name [OPTIONS]
 Required options:
 EOF
             print_profile_option_help --core-ref
+            print_profile_option_help --core-path
             cat << EOF
 
 Options:
@@ -330,6 +336,7 @@ Validation modes:
 
 Examples:
   $script_name --core-ref main
+  $script_name --core-path /path/to/sst-core --tag-suffix local-core
   $script_name --core-ref v15.1.0 --elements-repo https://github.com/custom/sst-elements.git --elements-ref develop
   $script_name --core-ref main --enable-perf-tracking --validation quick
 EOF
@@ -418,6 +425,7 @@ EOF
 Custom build options:
 EOF
             print_profile_option_help --core-repo
+            print_profile_option_help --core-path
             print_profile_option_help --core-ref
             print_profile_option_help --elements-repo
             print_profile_option_help --elements-ref
@@ -442,6 +450,7 @@ Examples:
   $script_name --sst-version 15.1.2 --elements-version 15.1.0 full
   $script_name --enable-perf-tracking core
   $script_name --core-repo https://github.com/sstsimulator/sst-core.git --core-ref main custom
+  $script_name --core-path /path/to/sst-core --tag-suffix local-core custom
   $script_name --experiment-name phold-example experiment
     $script_name --validation quick core
 
@@ -499,6 +508,11 @@ parse_simple_arguments() {
             --core-repo)
                 record_parsed_option "--core-repo"
                 SST_CORE_REPO="$2"
+                shift 2
+                ;;
+            --core-path)
+                record_parsed_option "--core-path"
+                SST_CORE_PATH="$2"
                 shift 2
                 ;;
             --core-ref)

@@ -51,6 +51,9 @@ source_libraries() {
     # Validation utilities
     source "$lib_dir/validation.sh"
 
+    # Local source checkout helpers
+    source "$lib_dir/local-sources.sh"
+
     # GitHub Actions integration
     source "$lib_dir/github-actions.sh"
 

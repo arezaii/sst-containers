@@ -36,7 +36,7 @@ show_usage() {
     echo "  $0 15.0.0 4.1.1                         # Download all with SST 15.0.0, MPICH 4.1.1"
     echo "  $0 --mpich-version 4.1.1                # Download only MPICH 4.1.1"
     echo "  $0 --sst-version 15.0.0                 # Download only SST-core 15.0.0"
-    echo "  $0 --sst-version 15.0.0 --sst-elements-version 15.1.2  # Download both"
+    echo "  $0 --sst-version 15.1.2 --sst-elements-version 15.1.0  # Download both"
 }
 
 # Parse command line arguments

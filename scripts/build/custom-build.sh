@@ -9,6 +9,8 @@ source "${SCRIPT_DIR}/../lib/init.sh"
 # Load simple argument parsing
 source "${SCRIPT_DIR}/../lib/simple-args.sh"
 
+trap cleanup_local_source_stage EXIT
+
 # Parse and normalize arguments using the shared CLI framework.
 if ! parse_script_arguments "custom-build" "none" "$@"; then
     trap - EXIT ERR
@@ -23,15 +25,7 @@ if [[ "$HELP_REQUESTED" == "true" ]]; then
 fi
 
 # Validate required arguments
-if ! validate_required_args "SST_CORE_REF" "$SST_CORE_REF" "SST-core reference (--core-ref)"; then
-    exit 1
-fi
-
-if ! validate_git_ref "$SST_CORE_REF" "SST-core reference"; then
-    exit 1
-fi
-
-if ! validate_url "$SST_CORE_REPO" "SST-core repository URL"; then
+if ! validate_custom_core_source_selection "$SST_CORE_PATH" "$SST_CORE_REF" "$SST_CORE_REPO"; then
     exit 1
 fi
 
@@ -83,11 +77,26 @@ if [[ -n "$SST_ELEMENTS_REPO" ]]; then
     BUILD_TYPE="full-build"
 fi
 
+USING_LOCAL_CORE_CHECKOUT="false"
+if [[ -n "$SST_CORE_PATH" ]]; then
+    USING_LOCAL_CORE_CHECKOUT="true"
+fi
+
 # Generate tag suffix if not explicitly provided
 if [[ "${TAG_SUFFIX_SET:-false}" != "true" ]]; then
-    TAG_SUFFIX="$SST_CORE_REF"
+    if [[ "$USING_LOCAL_CORE_CHECKOUT" == "true" ]]; then
+        TAG_SUFFIX="local"
+    else
+        TAG_SUFFIX="$SST_CORE_REF"
+    fi
     if [[ -n "$SST_ELEMENTS_REPO" ]]; then
         TAG_SUFFIX="${TAG_SUFFIX}-full"
+    fi
+fi
+
+if [[ "$USING_LOCAL_CORE_CHECKOUT" == "true" ]]; then
+    if ! stage_local_sst_core_checkout "$SST_CORE_PATH"; then
+        exit 1
     fi
 fi
 
@@ -97,8 +106,12 @@ IMAGE_TAG=$(generate_container_image_tag "$REGISTRY" "custom" "$TAG_SUFFIX" "$AR
 
 log_group_start "Custom SST Container Build"
 log_info "Build Configuration:"
-log_info "  SST Core Repository: $SST_CORE_REPO"
-log_info "  SST Core Reference: $SST_CORE_REF"
+if [[ "$USING_LOCAL_CORE_CHECKOUT" == "true" ]]; then
+    log_info "  SST Core Checkout: $SST_CORE_PATH"
+else
+    log_info "  SST Core Repository: $SST_CORE_REPO"
+    log_info "  SST Core Reference: $SST_CORE_REF"
+fi
 if [[ -n "$SST_ELEMENTS_REPO" ]]; then
     log_info "  SST Elements Repository: $SST_ELEMENTS_REPO"
     log_info "  SST Elements Reference: $SST_ELEMENTS_REF"
@@ -116,12 +129,20 @@ build_args=(
     "--file" "Containerfiles/Containerfile.tag"
     "--target" "$BUILD_TYPE"
     "--tag" "$IMAGE_TAG"
-    "--build-arg" "SSTrepo=${SST_CORE_REPO}"
-    "--build-arg" "tag=${SST_CORE_REF}"
     "--build-arg" "mpich=${MPICH_VERSION}"
     "--build-arg" "NCPUS=${BUILD_NCPUS}"
     "--platform" "$TARGET_PLATFORM"
 )
+
+if [[ "$USING_LOCAL_CORE_CHECKOUT" == "true" ]]; then
+    build_args+=("--build-arg" "LOCAL_SST_CORE=1")
+else
+    build_args+=(
+        "--build-arg" "LOCAL_SST_CORE=0"
+        "--build-arg" "SSTrepo=${SST_CORE_REPO}"
+        "--build-arg" "tag=${SST_CORE_REF}"
+    )
+fi
 
 # Add elements-specific build args if building full
 if [[ "$BUILD_TYPE" == "full-build" ]]; then
@@ -153,6 +174,8 @@ else
     log_error "Container build failed"
     exit 1
 fi
+
+cleanup_local_source_stage
 
 log_group_end
 

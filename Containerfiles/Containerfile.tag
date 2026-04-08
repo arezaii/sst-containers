@@ -2,6 +2,7 @@
 #
 # BUILD ARGUMENTS:
 #   SSTrepo: SST repository to use
+#   LOCAL_SST_CORE: Set to 1 to copy a staged local SST-core checkout instead of cloning
 #   tag:    repository tag name to build from
 #   SSTElementsRepo: SST-elements repository to use (optional)
 #   elementsTag: SST-elements tag/sha to build from (optional)
@@ -34,6 +35,14 @@
 #   --build-arg NCPUS=4 \
 #   --target full-build \
 #   -t sst-full:latest .
+#
+# Build from a staged local SST-core checkout:
+# podman build \
+#   -f Containerfile.tag \
+#   --build-arg LOCAL_SST_CORE=1 \
+#   --build-arg NCPUS=4 \
+#   --target core-build \
+#   -t sst-core:local .
 
 
 # This assumes access to the ubuntu image
@@ -92,11 +101,14 @@ RUN /sbin/ldconfig
 FROM base AS full-build
 
 ARG SSTrepo
+ARG LOCAL_SST_CORE=0
 ARG tag
 ARG SSTElementsRepo
 ARG elementsTag
 ARG NCPUS=2
 ARG ENABLE_PERF_TRACKING
+
+COPY .local-sources/sst-core /workspace/local-sst-core
 
 RUN mkdir -p /opt/SST/dev/
 
@@ -106,9 +118,16 @@ RUN if [ -z "$NCPUS" ]; then \
         export NCPUS=$(($(nproc) / 2)); \
         if [ "$NCPUS" -lt 1 ]; then export NCPUS=1; fi; \
     fi && \
-    git clone ${SSTrepo} sst-core && \
-    cd sst-core && \
-    git checkout ${tag} && \
+    if [ "$LOCAL_SST_CORE" = "1" ]; then \
+        mkdir -p /workspace/sst-core && \
+        cp -R /workspace/local-sst-core/. /workspace/sst-core && \
+        rm -f /workspace/sst-core/.gitkeep; \
+    else \
+        git clone ${SSTrepo} sst-core && \
+        cd sst-core && \
+        git checkout ${tag}; \
+    fi && \
+    cd /workspace/sst-core && \
     ./autogen.sh && \
     mkdir ../build && \
     cd ../build && \
@@ -121,7 +140,7 @@ RUN if [ -z "$NCPUS" ]; then \
     make -j$NCPUS all && \
     make install && \
     cd /workspace && \
-    rm -rf sst-core build
+    rm -rf sst-core build local-sst-core
 
 # Download SST-elements from repo and checkout tag
 RUN if [ -z "$NCPUS" ]; then \
@@ -150,9 +169,12 @@ FROM base AS core-build
 RUN mkdir -p /opt/SST/dev/
 
 ARG SSTrepo
+ARG LOCAL_SST_CORE=0
 ARG tag
 ARG NCPUS=2
 ARG ENABLE_PERF_TRACKING
+
+COPY .local-sources/sst-core /workspace/local-sst-core
 
 # Download SST-core from repo and checkout tag
 WORKDIR /workspace
@@ -160,9 +182,16 @@ RUN if [ -z "$NCPUS" ]; then \
         export NCPUS=$(($(nproc) / 2)); \
         if [ "$NCPUS" -lt 1 ]; then export NCPUS=1; fi; \
     fi && \
-    git clone ${SSTrepo} sst-core && \
-    cd sst-core && \
-    git checkout ${tag} && \
+    if [ "$LOCAL_SST_CORE" = "1" ]; then \
+        mkdir -p /workspace/sst-core && \
+        cp -R /workspace/local-sst-core/. /workspace/sst-core && \
+        rm -f /workspace/sst-core/.gitkeep; \
+    else \
+        git clone ${SSTrepo} sst-core && \
+        cd sst-core && \
+        git checkout ${tag}; \
+    fi && \
+    cd /workspace/sst-core && \
     ./autogen.sh && \
     mkdir ../build && \
     cd ../build && \
@@ -175,7 +204,7 @@ RUN if [ -z "$NCPUS" ]; then \
     make -j$NCPUS all && \
     make install && \
     cd /workspace && \
-    rm -rf sst-core build
+    rm -rf sst-core build local-sst-core
 
 ENV PATH="$PATH:/opt/SST/dev/bin/"
 ENV LD_LIBRARY_PATH="/opt/SST/dev/lib:${LD_LIBRARY_PATH}"

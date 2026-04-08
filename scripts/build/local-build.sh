@@ -58,6 +58,11 @@ if ! validate_container_type "$CONTAINER_TYPE"; then
     exit 1
 fi
 
+if [[ "$VALIDATE_ONLY" != "true" ]] && [[ -n "$SST_CORE_PATH" ]] && [[ "$CONTAINER_TYPE" != "custom" ]]; then
+    log_error "--core-path is only supported with CONTAINER_TYPE=custom"
+    exit 1
+fi
+
 # Validate SST version for release builds
 if [[ "$CONTAINER_TYPE" =~ ^(core|full)$ ]]; then
     if ! validate_sst_version "$SST_VERSION"; then
@@ -195,11 +200,7 @@ build_container() {
         "full")
             containerfile="${PROJECT_ROOT}/Containerfiles/Containerfile"
             build_target="sst-full"
-            # Generate descriptive tag name for mixed versions
             local tag_base="$SST_VERSION"
-            if [[ -n "$SST_ELEMENTS_VERSION" && "$SST_ELEMENTS_VERSION" != "$SST_VERSION" ]]; then
-                tag_base="${SST_VERSION}-el${SST_ELEMENTS_VERSION}"
-            fi
             if [[ "${TAG_SUFFIX_SET:-false}" == "true" ]]; then
                 tag_base="$TAG_SUFFIX"
             fi
@@ -209,7 +210,6 @@ build_container() {
                 "--build-arg" "mpich=${MPICH_VERSION}"
                 "--build-arg" "NCPUS=${BUILD_NCPUS}"
             )
-            # Add SST_ELEMENTS_VERSION if specified (otherwise defaults to SSTver)
             if [[ -n "$SST_ELEMENTS_VERSION" ]]; then
                 build_args+=(
                     "--build-arg" "SST_ELEMENTS_VERSION=${SST_ELEMENTS_VERSION}"
@@ -230,10 +230,18 @@ build_container() {
             ;;
         "custom")
             local build_suffix=""
+            local using_local_core_checkout="false"
 
             containerfile="${PROJECT_ROOT}/Containerfiles/Containerfile.tag"
-            if ! validate_required_args "SST_CORE_REF" "$SST_CORE_REF" "SST-core reference (--core-ref)"; then
+            if ! validate_custom_core_source_selection "$SST_CORE_PATH" "$SST_CORE_REF" "$SST_CORE_REPO"; then
                 exit 1
+            fi
+
+            if [[ -n "$SST_CORE_PATH" ]]; then
+                using_local_core_checkout="true"
+                if ! stage_local_sst_core_checkout "$SST_CORE_PATH"; then
+                    exit 1
+                fi
             fi
 
             if [[ -n "$SST_ELEMENTS_REF" ]] && [[ -z "$SST_ELEMENTS_REPO" ]]; then
@@ -242,14 +250,22 @@ build_container() {
 
             if [[ -n "$SST_ELEMENTS_REPO" || -n "$SST_ELEMENTS_REF" ]]; then
                 build_target="full-build"
-                build_suffix="${SST_CORE_REF}-full"
+                if [[ "$using_local_core_checkout" == "true" ]]; then
+                    build_suffix="local-full"
+                else
+                    build_suffix="${SST_CORE_REF}-full"
+                fi
                 build_args+=(
                     "--build-arg" "SSTElementsRepo=${SST_ELEMENTS_REPO}"
                     "--build-arg" "elementsTag=${SST_ELEMENTS_REF:-main}"
                 )
             else
                 build_target="core-build"
-                build_suffix="${SST_CORE_REF}"
+                if [[ "$using_local_core_checkout" == "true" ]]; then
+                    build_suffix="local"
+                else
+                    build_suffix="${SST_CORE_REF}"
+                fi
             fi
 
             if [[ "${TAG_SUFFIX_SET:-false}" == "true" ]]; then
@@ -258,12 +274,21 @@ build_container() {
 
             tag_name=$(generate_container_image_tag "$REGISTRY" "custom" "$build_suffix" "$ARCH" "$ENABLE_PERF_TRACKING")
 
-            build_args+=(
-                "--build-arg" "SSTrepo=${SST_CORE_REPO}"
-                "--build-arg" "tag=${SST_CORE_REF}"
-                "--build-arg" "mpich=${MPICH_VERSION}"
-                "--build-arg" "NCPUS=${BUILD_NCPUS}"
-            )
+            if [[ "$using_local_core_checkout" == "true" ]]; then
+                build_args+=(
+                    "--build-arg" "LOCAL_SST_CORE=1"
+                    "--build-arg" "mpich=${MPICH_VERSION}"
+                    "--build-arg" "NCPUS=${BUILD_NCPUS}"
+                )
+            else
+                build_args+=(
+                    "--build-arg" "LOCAL_SST_CORE=0"
+                    "--build-arg" "SSTrepo=${SST_CORE_REPO}"
+                    "--build-arg" "tag=${SST_CORE_REF}"
+                    "--build-arg" "mpich=${MPICH_VERSION}"
+                    "--build-arg" "NCPUS=${BUILD_NCPUS}"
+                )
+            fi
             ;;
         "experiment")
             if [[ -z "$EXPERIMENT_NAME" ]]; then
@@ -323,6 +348,8 @@ build_container() {
 
     echo "$tag_name" > .last_built_image
     log_success "Build completed: $tag_name"
+
+    cleanup_local_source_stage
 }
 
 # Function to validate built container
@@ -384,6 +411,8 @@ validate_built_container() {
 cleanup() {
     log_info "Cleaning up..."
 
+    cleanup_local_source_stage
+
     if [[ -f ".last_built_image" ]]; then
         local tag_name
         tag_name=$(cat .last_built_image)
@@ -401,6 +430,7 @@ cleanup() {
 # Function for error cleanup (removes temporary files but not images)
 error_cleanup() {
     log_info "Error cleanup..."
+    cleanup_local_source_stage
     # Only clean up temporary files on error, preserve built images
     rm -f .last_built_image
 }
