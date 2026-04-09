@@ -275,6 +275,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare build arguments
+        id: prepare-build-args
+        run: |
+          {
+            echo 'build_args<<EOF'
+            jq -r '.[]' <<'JSON'
+          ${{ matrix.build_args_json }}
+          JSON
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push container
         uses: docker/build-push-action@v7
         with:
@@ -282,7 +293,7 @@ jobs:
           file: ${{ matrix.containerfile_path }}
           target: ${{ matrix.build_target }}
           platforms: ${{ matrix.platform }}
-          build-args: ${{ join(fromJson(matrix.build_args_json), '\n') }}
+          build-args: ${{ steps.prepare-build-args.outputs.build_args }}
           labels: |
             com.github.sha=${{ github.sha }}
             com.github.workflow=${{ github.workflow }}
