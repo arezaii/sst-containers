@@ -58,6 +58,8 @@ ARG mpich_prefix=mpich-$mpich
 ARG NCPUS=2
 ARG ENABLE_PERF_TRACKING=
 
+WORKDIR /tmp
+
 # Update and install packages (assumes access to package repositories)
 RUN apt update && apt install -y \
     build-essential \
