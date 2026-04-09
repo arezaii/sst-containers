@@ -67,8 +67,7 @@ DEFAULT_SIZE_LIMITS_MB = {
 LOCAL_SOURCE_STAGE_ROOT_REL = ".build-contexts"
 LOCAL_SST_CORE_STAGE_REL = f"{LOCAL_SOURCE_STAGE_ROOT_REL}/sst-core-input"
 LOCAL_SST_CORE_CONTEXT_NAME = "sst_core_input"
-EMPTY_BUILD_CONTEXT_ROOT_REL = "Containerfiles/empty-contexts"
-EMPTY_SST_CORE_CONTEXT_REL = f"{EMPTY_BUILD_CONTEXT_ROOT_REL}/sst-core"
+LOCAL_SST_CORE_SOURCE_STAGE_ARG = "SST_CORE_SOURCE_STAGE=sst-core-local-source"
 
 
 class OrchestrationError(RuntimeError):
@@ -368,12 +367,6 @@ def _local_sst_core_stage_dir() -> Path:
     """Return the local SST-core stage directory inside the build context."""
 
     return REPO_ROOT / LOCAL_SST_CORE_STAGE_REL
-
-
-def _empty_sst_core_context_dir() -> Path:
-    """Return the repository-tracked empty SST-core build context directory."""
-
-    return REPO_ROOT / EMPTY_SST_CORE_CONTEXT_REL
 
 
 def reset_local_source_stage_dir(stage_dir: Path | None = None) -> Path:
@@ -1255,7 +1248,6 @@ def plan_workflow_build_spec(
     build_args = [
         f"mpich={normalized_request.mpich_version}",
         f"NCPUS={normalized_request.build_ncpus}",
-        "LOCAL_SST_CORE=0",
         f"SSTrepo={normalized_request.sst_core_repo}",
         f"tag={normalized_request.sst_core_ref}",
     ]
@@ -1277,9 +1269,7 @@ def plan_workflow_build_spec(
         docker_context="Containerfiles",
         build_target=build_target,
         build_args=tuple(build_args),
-        additional_contexts=(
-            _sst_core_input_context_entry(_empty_sst_core_context_dir()),
-        ),
+        additional_contexts=(),
         no_cache=normalized_request.no_cache,
     )
     return BuildSpec(
@@ -1879,11 +1869,10 @@ def _plan_custom_build_spec(normalized_request: CustomBuildRequest) -> BuildSpec
         f"NCPUS={normalized_request.build_ncpus}",
     ]
     if using_local_core_checkout:
-        build_args.append("LOCAL_SST_CORE=1")
+        build_args.append(LOCAL_SST_CORE_SOURCE_STAGE_ARG)
     else:
         build_args.extend(
             [
-                "LOCAL_SST_CORE=0",
                 f"SSTrepo={normalized_request.sst_core_repo}",
                 f"tag={normalized_request.sst_core_ref}",
             ]
@@ -1909,9 +1898,9 @@ def _plan_custom_build_spec(normalized_request: CustomBuildRequest) -> BuildSpec
         build_target=build_type,
         build_args=tuple(build_args),
         additional_contexts=(
-            _sst_core_input_context_entry(
-                _local_sst_core_stage_dir() if using_local_core_checkout else _empty_sst_core_context_dir()
-            ),
+            (_sst_core_input_context_entry(_local_sst_core_stage_dir()),)
+            if using_local_core_checkout
+            else ()
         ),
         no_cache=normalized_request.no_cache,
     )

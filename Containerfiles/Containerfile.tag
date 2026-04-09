@@ -3,7 +3,7 @@
 #
 # BUILD ARGUMENTS:
 #   SSTrepo: SST repository to use
-#   LOCAL_SST_CORE: Set to 1 to use the staged `sst_core_input` build context instead of cloning
+#   SST_CORE_SOURCE_STAGE: Source stage to use for SST-core (defaults to git clone stage)
 #   tag:    repository tag name to build from
 #   SSTElementsRepo: SST-elements repository to use (optional)
 #   elementsTag: SST-elements tag/sha to build from (optional)
@@ -21,7 +21,6 @@
 # Build SST-core only (default):
 # podman build \
 #   -f Containerfile.tag \
-#   --build-context sst_core_input=Containerfiles/empty-contexts/sst-core \
 #   --build-arg SSTrepo=https://github.com/sstsimulator/sst-core.git \
 #   --build-arg tag=master \
 #   --build-arg NCPUS=4 \
@@ -30,7 +29,6 @@
 # Build SST-core + SST-elements:
 # podman build \
 #   -f Containerfile.tag \
-#   --build-context sst_core_input=Containerfiles/empty-contexts/sst-core \
 #   --build-arg SSTrepo=https://github.com/sstsimulator/sst-core.git \
 #   --build-arg tag=master \
 #   --build-arg SSTElementsRepo=https://github.com/sstsimulator/sst-elements.git \
@@ -43,11 +41,13 @@
 # podman build \
 #   -f Containerfile.tag \
 #   --build-context sst_core_input=/path/to/staged/sst-core \
-#   --build-arg LOCAL_SST_CORE=1 \
+#   --build-arg SST_CORE_SOURCE_STAGE=sst-core-local-source \
 #   --build-arg NCPUS=4 \
 #   --target core-build \
 #   -t sst-core:local .
 
+
+ARG SST_CORE_SOURCE_STAGE=sst-core-git-source
 
 # This assumes access to the ubuntu image
 FROM ubuntu:22.04 AS base
@@ -100,34 +100,37 @@ rm -rf $mpich_prefix $mpich_prefix.tar.gz
 
 RUN /sbin/ldconfig
 
-FROM base AS full-build
+FROM base AS sst-core-git-source
 
 ARG SSTrepo
-ARG LOCAL_SST_CORE=0
 ARG tag
+
+WORKDIR /workspace
+RUN git clone ${SSTrepo} sst-core && \
+    cd sst-core && \
+    git checkout ${tag}
+
+FROM scratch AS sst-core-local-source
+
+COPY --from=sst_core_input . /workspace/sst-core
+
+FROM ${SST_CORE_SOURCE_STAGE} AS sst-core-source
+
+FROM base AS full-build
+
 ARG SSTElementsRepo
 ARG elementsTag
 ARG NCPUS=2
 ARG ENABLE_PERF_TRACKING
 
-COPY --from=sst_core_input . /workspace/local-sst-core
+COPY --from=sst-core-source /workspace/sst-core /workspace/sst-core
 
 RUN mkdir -p /opt/SST/dev/
 
-# Download SST-core from repo and checkout tag
 WORKDIR /workspace
 RUN if [ -z "$NCPUS" ]; then \
         export NCPUS=$(($(nproc) / 2)); \
         if [ "$NCPUS" -lt 1 ]; then export NCPUS=1; fi; \
-    fi && \
-    if [ "$LOCAL_SST_CORE" = "1" ]; then \
-        mkdir -p /workspace/sst-core && \
-        cp -R /workspace/local-sst-core/. /workspace/sst-core && \
-        rm -f /workspace/sst-core/.gitkeep; \
-    else \
-        git clone ${SSTrepo} sst-core && \
-        cd sst-core && \
-        git checkout ${tag}; \
     fi && \
     cd /workspace/sst-core && \
     ./autogen.sh && \
@@ -142,7 +145,7 @@ RUN if [ -z "$NCPUS" ]; then \
     make -j$NCPUS all && \
     make install && \
     cd /workspace && \
-    rm -rf sst-core build local-sst-core
+    rm -rf sst-core build
 
 # Download SST-elements from repo and checkout tag
 RUN if [ -z "$NCPUS" ]; then \
@@ -170,28 +173,15 @@ FROM base AS core-build
 
 RUN mkdir -p /opt/SST/dev/
 
-ARG SSTrepo
-ARG LOCAL_SST_CORE=0
-ARG tag
 ARG NCPUS=2
 ARG ENABLE_PERF_TRACKING
 
-COPY --from=sst_core_input . /workspace/local-sst-core
+COPY --from=sst-core-source /workspace/sst-core /workspace/sst-core
 
-# Download SST-core from repo and checkout tag
 WORKDIR /workspace
 RUN if [ -z "$NCPUS" ]; then \
         export NCPUS=$(($(nproc) / 2)); \
         if [ "$NCPUS" -lt 1 ]; then export NCPUS=1; fi; \
-    fi && \
-    if [ "$LOCAL_SST_CORE" = "1" ]; then \
-        mkdir -p /workspace/sst-core && \
-        cp -R /workspace/local-sst-core/. /workspace/sst-core && \
-        rm -f /workspace/sst-core/.gitkeep; \
-    else \
-        git clone ${SSTrepo} sst-core && \
-        cd sst-core && \
-        git checkout ${tag}; \
     fi && \
     cd /workspace/sst-core && \
     ./autogen.sh && \
@@ -206,7 +196,7 @@ RUN if [ -z "$NCPUS" ]; then \
     make -j$NCPUS all && \
     make install && \
     cd /workspace && \
-    rm -rf sst-core build local-sst-core
+    rm -rf sst-core build
 
 ENV PATH="$PATH:/opt/SST/dev/bin/"
 ENV LD_LIBRARY_PATH="/opt/SST/dev/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
