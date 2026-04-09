@@ -61,7 +61,6 @@ class VerificationSpec:
     mode: str
     max_size_mb: int
     platforms: tuple[str, ...]
-    requires_runtime_validation: bool
 
 
 @dataclass(frozen=True)

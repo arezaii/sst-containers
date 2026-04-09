@@ -13,37 +13,63 @@ LOCAL_SOURCE_STAGE_ROOT_REL=".build-contexts"
 LOCAL_SST_CORE_STAGE_REL="${LOCAL_SOURCE_STAGE_ROOT_REL}/sst-core-input"
 LOCAL_CORE_STAGE_ACTIVE="false"
 
+run_local_sources_python() {
+    local operation="$1"
+    shift || true
+    local python_bin="${PYTHON_BIN:-python3}"
+    local project_root="${PROJECT_ROOT:-$(cd "${SCRIPT_LIB_DIR}/../.." && pwd)}"
+
+    PYTHONPATH="${project_root}${PYTHONPATH:+:${PYTHONPATH}}" \
+        "$python_bin" - "$operation" "$@" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from sst_container_factory.orchestration import (
+    reset_local_source_stage_dir,
+    stage_local_sst_core_checkout,
+    validate_local_sst_core_checkout,
+)
+
+
+def _optional_path(raw_value: str | None) -> Path | None:
+    if not raw_value:
+        return None
+    return Path(raw_value)
+
+
+def main() -> int:
+    operation = sys.argv[1]
+    try:
+        if operation == "reset":
+            reset_local_source_stage_dir(_optional_path(sys.argv[2] if len(sys.argv) > 2 else None))
+            return 0
+        if operation == "validate":
+            validate_local_sst_core_checkout(sys.argv[2])
+            return 0
+        if operation == "stage":
+            stage_local_sst_core_checkout(
+                sys.argv[2],
+                _optional_path(sys.argv[3] if len(sys.argv) > 3 else None),
+            )
+            return 0
+        print(f"Unsupported local-sources operation: {operation}", file=sys.stderr)
+        return 1
+    except Exception as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+raise SystemExit(main())
+PY
+}
+
 cleanup_local_source_stage() {
     if [[ "${LOCAL_CORE_STAGE_ACTIVE:-false}" == "true" ]]; then
         reset_local_source_stage_dir >/dev/null 2>&1 || true
         LOCAL_CORE_STAGE_ACTIVE="false"
     fi
-}
-
-is_git_work_tree() {
-    local source_dir="$1"
-
-    git -C "$source_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1
-}
-
-stage_git_work_tree() {
-    local source_dir="$1"
-    local stage_dir="$2"
-    local temp_index
-    local status=0
-
-    temp_index="$(mktemp "${TMPDIR:-/tmp}/sst-core-stage-index.XXXXXX")"
-
-    if ! GIT_INDEX_FILE="$temp_index" git -C "$source_dir" read-tree HEAD; then
-        status=$?
-    elif ! GIT_INDEX_FILE="$temp_index" git -C "$source_dir" add -A .; then
-        status=$?
-    elif ! GIT_INDEX_FILE="$temp_index" git -C "$source_dir" checkout-index --all --force --prefix="$stage_dir/"; then
-        status=$?
-    fi
-
-    rm -f "$temp_index"
-    return "$status"
 }
 
 get_local_sst_core_stage_dir() {
@@ -64,33 +90,13 @@ reset_local_source_stage_dir() {
         stage_dir="$(get_local_sst_core_stage_dir)"
     fi
 
-    rm -rf "$stage_dir"
-    mkdir -p "$stage_dir"
-    : > "$stage_dir/.gitkeep"
+    run_local_sources_python reset "$stage_dir"
 }
 
 validate_local_sst_core_checkout() {
     local source_dir="$1"
-    local source_description="${2:-Local SST-core checkout (--core-path)}"
-    local resolved_source_dir
 
-    if ! validate_directory_exists "$source_dir" "$source_description"; then
-        return 1
-    fi
-
-    resolved_source_dir="$(cd "$source_dir" && pwd)"
-
-    if [[ ! -f "$resolved_source_dir/autogen.sh" ]]; then
-        log_error "$source_description is missing autogen.sh: $resolved_source_dir"
-        return 1
-    fi
-
-    if [[ ! -f "$resolved_source_dir/configure.ac" && ! -f "$resolved_source_dir/configure.ac.in" ]]; then
-        log_error "$source_description does not look like an SST-core source tree: $resolved_source_dir"
-        return 1
-    fi
-
-    return 0
+    run_local_sources_python validate "$source_dir"
 }
 
 validate_custom_core_source_selection() {
@@ -118,28 +124,11 @@ validate_custom_core_source_selection() {
 stage_local_sst_core_checkout() {
     local source_dir="$1"
     local stage_dir="${2:-}"
-    local resolved_source_dir
-
-    validate_local_sst_core_checkout "$source_dir" "Local SST-core checkout (--core-path)" || return 1
-    resolved_source_dir="$(cd "$source_dir" && pwd)"
 
     if [[ -z "$stage_dir" ]]; then
         stage_dir="$(get_local_sst_core_stage_dir)"
     fi
 
-    reset_local_source_stage_dir "$stage_dir"
-
-    if is_git_work_tree "$resolved_source_dir" && git -C "$resolved_source_dir" rev-parse --verify HEAD >/dev/null 2>&1; then
-        stage_git_work_tree "$resolved_source_dir" "$stage_dir"
-    else
-        tar --exclude='.git' -cf - -C "$resolved_source_dir" . | tar -xf - -C "$stage_dir"
-    fi
-
-    if [[ ! -f "$stage_dir/autogen.sh" ]]; then
-        log_error "Failed to stage local SST-core checkout into build context: $stage_dir"
-        return 1
-    fi
-
+    run_local_sources_python stage "$source_dir" "$stage_dir"
     LOCAL_CORE_STAGE_ACTIVE="true"
-    log_info "Staged local SST-core checkout: $resolved_source_dir"
 }

@@ -94,4 +94,5 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           MAX_SIZE_MB: ${{ inputs.max_image_size_mb }}
           VALIDATION_MODE: ${{ inputs.validation_mode }}
-        run: ./scripts/orchestration/validate-container.sh
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m sst_container_factory.cli validate-container

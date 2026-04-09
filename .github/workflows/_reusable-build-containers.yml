@@ -181,7 +181,8 @@ jobs:
           IGNORE_CACHE: ${{ inputs.ignore_cache }}
           TAG_AS_LATEST: ${{ inputs.tag_as_latest }}
           PUBLISH_MASTER_LATEST: ${{ inputs.publish_master_latest }}
-        run: ./scripts/orchestration/prepare-workflow-build.sh
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m sst_container_factory.cli prepare-workflow-build
 
   build-containers:
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
@@ -206,7 +207,7 @@ jobs:
       - name: Download MPICH source
         if: needs.prepare-build-plan.outputs.download_mpich == 'true' && steps.cache-mpich.outputs.cache-hit != 'true'
         working-directory: Containerfiles
-        run: ../scripts/build/download_tarballs.sh --mpich-version ${{ needs.prepare-build-plan.outputs.mpich_version }}
+        run: PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-tarballs --mpich-version ${{ needs.prepare-build-plan.outputs.mpich_version }}
 
       - name: Determine SST cache key and paths
         id: sst-cache-config
@@ -245,9 +246,9 @@ jobs:
         working-directory: Containerfiles
         run: |
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
-            ../scripts/build/download_tarballs.sh --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}"
+            PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-tarballs --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}"
           else
-            ../scripts/build/download_tarballs.sh --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}"
+            PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-tarballs --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}"
           fi
 
       - name: Validate SST sources
@@ -387,16 +388,15 @@ jobs:
 
       - name: Create multi-architecture manifest
         id: manifest
+        env:
+          PLATFORMS: ${{ inputs.build_platforms }}
+          MANIFEST_TAG: ${{ needs.prepare-build-plan.outputs.manifest_tag }}
+          ALIAS_TAGS: ${{ needs.prepare-build-plan.outputs.alias_tags_json }}
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          PLATFORMS="${{ inputs.build_platforms }}"
-
-          MANIFEST_TAG="${{ needs.prepare-build-plan.outputs.manifest_tag }}"
-
           echo "Creating manifest: ${MANIFEST_TAG}"
 
-          source scripts/lib/config.sh
-
-          IMAGES=$(collect_verified_manifest_images "${MANIFEST_TAG}" "$PLATFORMS")
+          IMAGES="$(python3 -c 'import json, os; from sst_container_factory.orchestration import collect_verified_manifest_images; print(json.dumps(collect_verified_manifest_images(os.environ["MANIFEST_TAG"], os.environ["PLATFORMS"])))')"
 
           MANIFESTS=()
           while IFS= read -r manifest_ref; do
@@ -411,7 +411,6 @@ jobs:
             echo "Creating multi-arch manifest: ${MANIFEST_TAG}"
             docker buildx imagetools create --tag "${MANIFEST_TAG}" "${MANIFESTS[@]}"
 
-            ALIAS_TAGS='${{ needs.prepare-build-plan.outputs.alias_tags_json }}'
             if [[ "$(echo "$ALIAS_TAGS" | jq 'length')" -gt 0 ]]; then
               while IFS= read -r alias_tag; do
                 if [[ -n "$alias_tag" ]]; then

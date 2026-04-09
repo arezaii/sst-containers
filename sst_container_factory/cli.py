@@ -569,10 +569,7 @@ Examples:
   %(prog)s custom --core-repo https://github.com/sstsimulator/sst-core.git --core-ref main
   %(prog)s custom --core-path /path/to/sst-core --tag-suffix local-core
   %(prog)s experiment --experiment-name phold-example
-  %(prog)s core --validation quick
-
-For a quick smoke test wrapper, use:
-  tests/test-local-build.sh""",
+    %(prog)s core --validation quick""",
     )
     local_build_subparsers = local_build_parser.add_subparsers(
         dest="container_type",

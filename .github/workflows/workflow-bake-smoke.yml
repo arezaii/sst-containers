@@ -7,7 +7,6 @@ on:
       - '.github/workflows/_reusable-build-containers.yml'
       - '.github/workflows/workflow-bake-smoke.yml'
       - 'sst_container_factory/**'
-      - 'scripts/orchestration/prepare-workflow-build.sh'
       - 'Containerfiles/**'
       - 'ahp-graph/**'
       - 'phold-example/**'
@@ -128,7 +127,8 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: ./scripts/orchestration/prepare-workflow-build.sh
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m sst_container_factory.cli prepare-workflow-build
 
       - name: Write Buildx bake definition
         env:

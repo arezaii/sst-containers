@@ -23,38 +23,11 @@ class OrchestrationTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Resolve the repository root once for shim tests."""
+        """Resolve the repository root once for the Python test suite."""
 
         cls.repo_root = Path(__file__).resolve().parents[1]
         cls.host_platform = orchestration.detect_host_platform()
         cls.host_arch = orchestration.platform_to_arch(cls.host_platform)
-
-    def _run_shim(
-        self,
-        script_relative_path: str,
-        env_updates: dict[str, str],
-        args: list[str] | None = None,
-        cwd: Path | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        """Run a shell shim with the repository Python interpreter wired in."""
-
-        env = os.environ.copy()
-        env.update(
-            {
-                "PYTHON_BIN": sys.executable,
-                "PYTHONPATH": str(self.repo_root),
-            }
-        )
-        env.update(env_updates)
-
-        return subprocess.run(
-            [str(self.repo_root / script_relative_path), *(args or [])],
-            cwd=cwd or self.repo_root,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
 
     def _run_python_cli(
         self,
@@ -296,6 +269,56 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("unrecognized arguments: --enable-perf-tracking", stderr)
 
+    def test_cli_custom_build_help_documents_local_checkout_option(self) -> None:
+        """Custom-build help should advertise local checkout support."""
+
+        status, stdout, _stderr = self._run_python_cli(["custom-build", "--help"])
+
+        self.assertEqual(status, 0)
+        self.assertIn("--core-path PATH", stdout)
+        self.assertNotIn("--sst-core-ref", stdout)
+
+    def test_cli_download_tarballs_help_documents_elements_version(self) -> None:
+        """Downloader help should include the SST-elements version option."""
+
+        status, stdout, _stderr = self._run_python_cli(["download-tarballs", "--help"])
+
+        self.assertEqual(status, 0)
+        self.assertIn("--sst-elements-version", stdout)
+
+    def test_cli_experiment_build_help_omits_removed_prefix_option(self) -> None:
+        """Experiment-build help should not expose the retired prefix option."""
+
+        status, stdout, _stderr = self._run_python_cli(["experiment-build", "--help"])
+
+        self.assertEqual(status, 0)
+        self.assertNotIn("--prefix", stdout)
+
+    def test_cli_local_build_help_lists_custom_subcommand(self) -> None:
+        """Local-build help should list the custom subcommand and omit legacy engine aliases."""
+
+        status, stdout, _stderr = self._run_python_cli(["local-build", "--help"])
+
+        self.assertEqual(status, 0)
+        self.assertIn("custom      Build from custom repositories and refs", stdout)
+        self.assertNotIn("--docker", stdout)
+
+    def test_cli_local_build_custom_help_documents_perf_tracking(self) -> None:
+        """The local-build custom subcommand help should retain its perf flag."""
+
+        status, stdout, _stderr = self._run_python_cli(["local-build", "custom", "--help"])
+
+        self.assertEqual(status, 0)
+        self.assertIn("--enable-perf-tracking", stdout)
+
+    def test_cli_local_build_experiment_help_omits_perf_tracking(self) -> None:
+        """The local-build experiment subcommand should not advertise perf tracking."""
+
+        status, stdout, _stderr = self._run_python_cli(["local-build", "experiment", "--help"])
+
+        self.assertEqual(status, 0)
+        self.assertNotIn("--enable-perf-tracking", stdout)
+
     def test_prepare_image_config_generates_expected_outputs(self) -> None:
         """Prepare-image-config should compute the expected patterns."""
 
@@ -424,112 +447,30 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(result.platform, env["PLATFORM"])
         self.assertEqual(result.image_size_mb, 512)
 
-    def test_validate_container_shim_executes_python_library(self) -> None:
-        """The shell shim should dispatch into the Python validator."""
+    def test_metadata_validate_image_skips_runtime_env_warning_for_dev_profile(self) -> None:
+        """Development-image metadata validation should not warn about missing SST runtime env vars."""
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            fake_engine = Path(temp_dir) / "docker"
-            fake_engine.write_text(
-                "#!/bin/sh\n"
-                "set -eu\n"
-                "command=${1:?}\n"
-                "shift\n"
-                "case \"$command\" in\n"
-                "  pull)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  image)\n"
-                "    subcommand=${1:?}\n"
-                "    shift\n"
-                "    if [ \"$subcommand\" = \"inspect\" ]; then\n"
-                "      printf '268435456\\n'\n"
-                "      exit 0\n"
-                "    fi\n"
-                "    exit 1\n"
-                "    ;;\n"
-                "  create)\n"
-                "    printf 'container-456\\n'\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  rm)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "esac\n"
-                "exit 1\n",
-                encoding="utf-8",
-            )
-            fake_engine.chmod(fake_engine.stat().st_mode | stat.S_IXUSR)
+        metadata = {
+            "Size": 268435456,
+            "Architecture": "arm64",
+            "Config": {
+                "Env": [
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                ]
+            },
+            "RootFS": {"Layers": ["sha256:abc"]},
+        }
 
-            result = self._run_shim(
-                "scripts/orchestration/validate-container.sh",
-                {
-                    "IMAGE_TAG": "example/image:amd64",
-                    "PLATFORM": "linux/amd64",
-                    "CONTAINER_ENGINE": str(fake_engine),
-                },
-            )
+        with patch.object(orchestration, "_inspect_image_json", return_value=metadata):
+            with patch.object(orchestration, "log_warning") as log_warning:
+                orchestration.metadata_validate_image(
+                    "docker",
+                    "localhost:5000/sst-dev:latest-arm64",
+                    4096,
+                    validation_profile="development",
+                )
 
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("Container validation passed: 256 MB, linux/amd64", result.stdout)
-
-    def test_prepare_image_config_shim_writes_expected_outputs(self) -> None:
-        """The prepare-image-config shim should preserve GitHub output behavior."""
-
-        with tempfile.NamedTemporaryFile() as output_file:
-            result = self._run_shim(
-                "scripts/orchestration/prepare-image-config.sh",
-                {
-                    "CONTAINER_TYPE": "core",
-                    "IMAGE_PREFIX": "hpc-ai-adv-dev/sst",
-                    "TAG_SUFFIX": "15.1.2",
-                    "GITHUB_OUTPUT": output_file.name,
-                },
-            )
-
-            written = Path(output_file.name).read_text(encoding="utf-8")
-
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("image_prefix=hpc-ai-adv-dev/sst", written)
-        self.assertIn(
-            "core_full_pattern=ghcr.io/hpc-ai-adv-dev/sst-core:15.1.2",
-            written,
-        )
-
-    def test_validate_custom_inputs_shim_writes_expected_outputs(self) -> None:
-        """The validate-custom-inputs shim should preserve GitHub output behavior."""
-
-        with tempfile.NamedTemporaryFile() as output_file:
-            result = self._run_shim(
-                "scripts/orchestration/validate-custom-inputs.sh",
-                {
-                    "CORE_REF": "feature/test",
-                    "GITHUB_OUTPUT": output_file.name,
-                },
-            )
-
-            written = Path(output_file.name).read_text(encoding="utf-8")
-
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("build_type=core", written)
-        self.assertIn("tag_suffix=feature-test", written)
-
-    def test_validate_experiment_inputs_shim_detects_custom_containerfile(self) -> None:
-        """The validate-experiment-inputs shim should preserve GitHub output behavior."""
-
-        with tempfile.NamedTemporaryFile() as output_file:
-            result = self._run_shim(
-                "scripts/orchestration/validate-experiment-inputs.sh",
-                {
-                    "EXPERIMENT_NAME": "ahp-graph",
-                    "GITHUB_OUTPUT": output_file.name,
-                },
-            )
-
-            written = Path(output_file.name).read_text(encoding="utf-8")
-
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("experiment_exists=true", written)
-        self.assertIn("has_containerfile=true", written)
+        log_warning.assert_not_called()
 
     def test_experiment_build_from_env_builds_custom_container(self) -> None:
         """Experiment builds should use an experiment-local Containerfile when present."""
@@ -625,47 +566,6 @@ class OrchestrationTests(unittest.TestCase):
             result.image_tag,
             f"ghcr.io/hpc-ai-adv-dev/phold-example:latest-{self.host_arch}",
         )
-
-    def test_experiment_build_shim_completes_metadata_build_with_fake_engine(self) -> None:
-        """The experiment-build shell entrypoint should execute the Python-backed build path."""
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            fake_engine = Path(temp_dir) / "fake-engine"
-            fake_engine.write_text(
-                "#!/bin/sh\n"
-                "set -eu\n"
-                "command=${1:?}\n"
-                "shift\n"
-                "case \"$command\" in\n"
-                "  build)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  image)\n"
-                "    subcommand=${1:?}\n"
-                "    shift\n"
-                "    if [ \"$subcommand\" = \"inspect\" ]; then\n"
-                "      printf '[{\"Size\":268435456,\"Architecture\":\"amd64\",\"Config\":{\"Env\":[\"PATH=/opt/sst/bin:/opt/mpi/bin\"]},\"RootFS\":{\"Layers\":[\"sha256:abc\"]}}]'\n"
-                "      exit 0\n"
-                "    fi\n"
-                "    exit 1\n"
-                "    ;;\n"
-                "  manifest)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "esac\n"
-                "exit 1\n",
-                encoding="utf-8",
-            )
-            fake_engine.chmod(fake_engine.stat().st_mode | stat.S_IXUSR)
-
-            result = self._run_shim(
-                "scripts/build/experiment-build.sh",
-                {"CONTAINER_ENGINE": str(fake_engine)},
-                ["--validation", "metadata", "phold-example"],
-            )
-
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("Experiment build completed successfully!", result.stdout)
 
     def test_custom_build_from_env_metadata_validation_uses_image_inspect(self) -> None:
         """Custom builds should validate the built image through Python metadata inspection."""
@@ -796,62 +696,6 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(result.image_tag, custom_result.image_tag)
         self.assertEqual(result.image_size_mb, 256)
 
-    def test_custom_build_shim_supports_local_core_checkout(self) -> None:
-        """The custom-build shell entrypoint should still support local SST-core staging."""
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            source_dir = Path(temp_dir) / "sst-core"
-            source_dir.mkdir()
-            (source_dir / "autogen.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-            (source_dir / "configure.ac").write_text("AC_INIT([sst-core],[test])\n", encoding="utf-8")
-            (source_dir / "autogen.sh").chmod((source_dir / "autogen.sh").stat().st_mode | stat.S_IXUSR)
-
-            fake_engine = Path(temp_dir) / "docker"
-            fake_engine.write_text(
-                "#!/bin/sh\n"
-                "set -eu\n"
-                "command=${1:?}\n"
-                "shift\n"
-                "case \"$command\" in\n"
-                "  version)\n"
-                "    printf 'fake-engine version 1.0\\n'\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  info)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  build)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  image)\n"
-                "    subcommand=${1:?}\n"
-                "    shift\n"
-                "    if [ \"$subcommand\" = \"inspect\" ]; then\n"
-                "      printf '[{\"Size\":268435456,\"Architecture\":\"amd64\",\"Config\":{\"Env\":[\"PATH=/opt/sst/bin:/opt/mpi/bin\"]},\"RootFS\":{\"Layers\":[\"sha256:abc\"]}}]'\n"
-                "      exit 0\n"
-                "    fi\n"
-                "    exit 1\n"
-                "    ;;\n"
-                "esac\n"
-                "exit 1\n",
-                encoding="utf-8",
-            )
-            fake_engine.chmod(fake_engine.stat().st_mode | stat.S_IXUSR)
-
-            result = self._run_shim(
-                "scripts/build/custom-build.sh",
-                {"PATH": f"{temp_dir}:{os.environ.get('PATH', '')}"},
-                [
-                    "--core-path",
-                    str(source_dir),
-                    "--validation",
-                    "metadata",
-                ],
-            )
-
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("Custom build completed successfully", result.stdout)
-
     def test_local_build_from_env_builds_dev_image_with_metadata_validation(self) -> None:
         """Local-build should download, build, and validate dev images through Python."""
 
@@ -980,114 +824,6 @@ class OrchestrationTests(unittest.TestCase):
         )
         self.assertEqual(result.image_size_mb, 256)
 
-    def test_local_build_shim_completes_metadata_dev_build_with_fake_engine(self) -> None:
-        """The local-build shell entrypoint should dispatch into the Python-backed build path."""
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            fake_download_script = Path(temp_dir) / "download_tarballs.sh"
-            fake_download_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            fake_download_script.chmod(fake_download_script.stat().st_mode | stat.S_IXUSR)
-
-            fake_engine = Path(temp_dir) / "docker"
-            fake_engine.write_text(
-                "#!/bin/sh\n"
-                "set -eu\n"
-                "command=${1:?}\n"
-                "shift\n"
-                "case \"$command\" in\n"
-                "  version)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  info)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  build)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  image)\n"
-                "    subcommand=${1:?}\n"
-                "    shift\n"
-                "    if [ \"$subcommand\" = \"inspect\" ]; then\n"
-                "      printf '[{\"Size\":268435456,\"Architecture\":\"amd64\",\"Config\":{\"Env\":[\"PATH=/opt/sst/bin:/opt/mpi/bin\"]},\"RootFS\":{\"Layers\":[\"sha256:abc\"]}}]'\n"
-                "      exit 0\n"
-                "    fi\n"
-                "    exit 1\n"
-                "    ;;\n"
-                "  rmi)\n"
-                "    exit 0\n"
-                "    ;;\n"
-                "  builder)\n"
-                "    subcommand=${1:?}\n"
-                "    shift\n"
-                "    if [ \"$subcommand\" = \"prune\" ]; then\n"
-                "      exit 0\n"
-                "    fi\n"
-                "    exit 1\n"
-                "    ;;\n"
-                "esac\n"
-                "exit 1\n",
-                encoding="utf-8",
-            )
-            fake_engine.chmod(fake_engine.stat().st_mode | stat.S_IXUSR)
-
-            result = self._run_shim(
-                "scripts/build/local-build.sh",
-                {
-                    "PATH": f"{temp_dir}:{os.environ.get('PATH', '')}",
-                    "DOWNLOAD_SCRIPT": str(fake_download_script),
-                },
-                ["dev", "--validation", "metadata", "--cleanup"],
-            )
-
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("Build sequence completed successfully!", result.stdout)
-
-    def test_download_tarballs_shim_dispatches_to_python_cli(self) -> None:
-        """The download shell entrypoint should preserve the existing CLI contract."""
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            download_dir = temp_path / "downloads"
-            download_dir.mkdir()
-
-            mpich_source = temp_path / "mpich-source.tar.gz"
-            core_source = temp_path / "sstcore-source.tar.gz"
-            elements_source = temp_path / "sstelements-source.tar.gz"
-            mpich_source.write_bytes(b"shim-mpich-source")
-            core_source.write_bytes(b"shim-sst-core-source")
-            elements_source.write_bytes(b"shim-sst-elements-source")
-
-            result = self._run_shim(
-                "scripts/build/download_tarballs.sh",
-                {
-                    "SST_DOWNLOAD_MPICH_URL": mpich_source.resolve().as_uri(),
-                    "SST_DOWNLOAD_CORE_URL": core_source.resolve().as_uri(),
-                    "SST_DOWNLOAD_ELEMENTS_URL": elements_source.resolve().as_uri(),
-                },
-                [
-                    "--sst-version",
-                    "15.1.2",
-                    "--sst-elements-version",
-                    "15.1.0",
-                    "--mpich-version",
-                    "4.0.2",
-                    "--force",
-                ],
-                cwd=download_dir,
-            )
-
-            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-            self.assertIn("All requested files downloaded successfully!", result.stdout)
-            self.assertEqual((download_dir / "mpich-4.0.2.tar.gz").read_bytes(), b"shim-mpich-source")
-            self.assertEqual(
-                (download_dir / "sstcore-15.1.2.tar.gz").read_bytes(),
-                b"shim-sst-core-source",
-            )
-            self.assertEqual(
-                (download_dir / "sstelements-15.1.0.tar.gz").read_bytes(),
-                b"shim-sst-elements-source",
-            )
-
     def test_plan_standard_local_build_spec_captures_release_inputs(self) -> None:
         """Standard local builds should produce a reusable build spec."""
 
@@ -1153,7 +889,10 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(spec.source.source_kind, "local-checkout")
         self.assertTrue(spec.source.uses_local_core_checkout)
         self.assertEqual(spec.primary_platform_build.build_target, "full-build")
-        self.assertIn("LOCAL_SST_CORE=1", spec.primary_platform_build.build_args)
+        self.assertIn(
+            "SST_CORE_SOURCE_STAGE=sst-core-local-source",
+            spec.primary_platform_build.build_args,
+        )
         self.assertIn(
             "SSTElementsRepo=https://github.com/sstsimulator/sst-elements.git",
             spec.primary_platform_build.build_args,
@@ -1306,12 +1045,7 @@ class OrchestrationTests(unittest.TestCase):
             spec.primary_platform_build.build_args,
         )
         self.assertIn("tag=abc1234", spec.primary_platform_build.build_args)
-        self.assertEqual(
-            spec.primary_platform_build.additional_contexts,
-            (
-                f"sst_core_input={self.repo_root / 'Containerfiles' / 'empty-contexts' / 'sst-core'}",
-            ),
-        )
+        self.assertEqual(spec.primary_platform_build.additional_contexts, ())
         self.assertIsNotNone(spec.source_download)
         source_download = spec.source_download
         assert source_download is not None
@@ -1393,8 +1127,8 @@ class OrchestrationTests(unittest.TestCase):
         labels_map = cast(dict[str, str], amd64_target["labels"])
         self.assertEqual(labels_map["com.github.sha"], "deadbeef")
 
-    def test_plan_workflow_bake_emits_named_context_for_git_ref_builds(self) -> None:
-        """Git-ref workflow builds should consume the tracked empty SST-core context."""
+    def test_plan_workflow_bake_omits_named_context_for_git_ref_builds(self) -> None:
+        """Git-ref workflow builds should not emit local-only named contexts."""
 
         spec = orchestration.plan_workflow_build_spec(
             orchestration.WorkflowBuildRequest(
@@ -1411,12 +1145,123 @@ class OrchestrationTests(unittest.TestCase):
         bake_plan = orchestration.plan_workflow_bake(spec, workspace_root=self.repo_root)
         target_definitions = cast(dict[str, dict[str, object]], bake_plan.definition["target"])
         amd64_target = target_definitions["core-amd64"]
-        contexts_map = cast(dict[str, str], amd64_target["contexts"])
+        self.assertNotIn("contexts", amd64_target)
 
+    def test_collect_verified_manifest_images_reports_only_inspectable_platform_tags(self) -> None:
+        """Manifest helper should report only platform tags that can be inspected."""
+
+        manifest_tag = "ghcr.io/example/sst-core:15.1.2"
+
+        def fake_inspect(_engine: str, image_ref: str) -> bool:
+            return image_ref.endswith("-amd64")
+
+        with patch.object(orchestration, "inspect_remote_manifest", side_effect=fake_inspect):
+            with patch.object(orchestration, "log_warning") as log_warning:
+                result = orchestration.collect_verified_manifest_images(
+                    manifest_tag,
+                    "linux/amd64,linux/arm64",
+                )
+
+        self.assertEqual(result, (f"{manifest_tag}-amd64",))
+        log_warning.assert_called_once()
+
+    def test_collect_verified_manifest_images_returns_empty_tuple_when_manifest_inputs_missing(self) -> None:
+        """Manifest helper should short-circuit when required inputs are missing."""
+
+        self.assertEqual(orchestration.collect_verified_manifest_images("", "linux/amd64"), ())
         self.assertEqual(
-            contexts_map,
-            {"sst_core_input": "Containerfiles/empty-contexts/sst-core"},
+            orchestration.collect_verified_manifest_images(
+                "ghcr.io/example/sst-core:15.1.2",
+                "",
+            ),
+            (),
         )
+
+    def test_stage_local_sst_core_checkout_excludes_ignored_git_artifacts(self) -> None:
+        """Git checkout staging should keep local changes but exclude ignored files."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "sst-core"
+            stage_dir = Path(temp_dir) / "stage"
+            (source_dir / "src" / "sst" / "core").mkdir(parents=True)
+            (source_dir / "build").mkdir()
+            (source_dir / ".venv").mkdir()
+            (source_dir / ".gitignore").write_text("build/\n.venv/\n*.tmp\n", encoding="utf-8")
+            (source_dir / "autogen.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_dir / "configure.ac").write_text("AC_INIT([sst-core],[test])\n", encoding="utf-8")
+            tracked_file = source_dir / "src" / "sst" / "core" / "simulation.h"
+            tracked_file.write_text("tracked\n", encoding="utf-8")
+
+            subprocess.run(["git", "init", "-q", str(source_dir)], check=True)
+            subprocess.run(["git", "-C", str(source_dir), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(source_dir), "config", "user.name", "Test User"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(source_dir),
+                    "add",
+                    "autogen.sh",
+                    "configure.ac",
+                    ".gitignore",
+                    "src/sst/core/simulation.h",
+                ],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(source_dir), "commit", "-qm", "init"], check=True)
+
+            tracked_file.write_text("tracked\nmodified\n", encoding="utf-8")
+            (source_dir / "local-change.txt").write_text("local\n", encoding="utf-8")
+            (source_dir / "build" / "output.o").write_text("ignored\n", encoding="utf-8")
+            (source_dir / "generated.tmp").write_text("ignored\n", encoding="utf-8")
+            (source_dir / ".venv" / "marker").write_text("ignored\n", encoding="utf-8")
+
+            orchestration.stage_local_sst_core_checkout(str(source_dir), stage_dir)
+
+            self.assertTrue((stage_dir / "autogen.sh").is_file())
+            self.assertTrue((stage_dir / "configure.ac").is_file())
+            self.assertIn(
+                "modified",
+                (stage_dir / "src" / "sst" / "core" / "simulation.h").read_text(encoding="utf-8"),
+            )
+            self.assertTrue((stage_dir / "local-change.txt").is_file())
+            self.assertFalse((stage_dir / ".git").exists())
+            self.assertFalse((stage_dir / "build" / "output.o").exists())
+            self.assertFalse((stage_dir / "generated.tmp").exists())
+            self.assertFalse((stage_dir / ".venv" / "marker").exists())
+
+    def test_stage_local_sst_core_checkout_excludes_git_metadata_for_plain_tree(self) -> None:
+        """Plain directory staging should exclude `.git` metadata."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "sst-core"
+            stage_dir = Path(temp_dir) / "stage"
+            (source_dir / ".git").mkdir(parents=True)
+            (source_dir / "src" / "sst" / "core").mkdir(parents=True)
+            (source_dir / "autogen.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_dir / "configure.ac").write_text("AC_INIT([sst-core],[test])\n", encoding="utf-8")
+            (source_dir / "src" / "sst" / "core" / "simulation.h").write_text("tracked\n", encoding="utf-8")
+            (source_dir / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+            orchestration.stage_local_sst_core_checkout(str(source_dir), stage_dir)
+
+            self.assertTrue((stage_dir / "autogen.sh").is_file())
+            self.assertTrue((stage_dir / "configure.ac").is_file())
+            self.assertTrue((stage_dir / "src" / "sst" / "core" / "simulation.h").is_file())
+            self.assertFalse((stage_dir / ".git").exists())
+
+    def test_reset_local_source_stage_dir_restores_placeholder_layout(self) -> None:
+        """Resetting a stage directory should recreate only the placeholder marker."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stage_dir = Path(temp_dir) / "stage"
+            (stage_dir / "subdir").mkdir(parents=True)
+            (stage_dir / "subdir" / "file.txt").write_text("stale\n", encoding="utf-8")
+
+            orchestration.reset_local_source_stage_dir(stage_dir)
+
+            self.assertTrue((stage_dir / ".gitkeep").is_file())
+            self.assertFalse((stage_dir / "subdir" / "file.txt").exists())
 
     def test_prepare_workflow_build_from_env_writes_matrix_outputs(self) -> None:
         """The workflow planner adapter should emit a matrix and source-download outputs."""
@@ -1495,68 +1340,6 @@ class OrchestrationTests(unittest.TestCase):
             amd64_target["dockerfile"],
             str(self.repo_root / "Containerfiles" / "Containerfile.experiment"),
         )
-
-    def test_prepare_workflow_build_shim_emits_latest_alias_output(self) -> None:
-        """The workflow planner shim should expose latest aliases for release-style requests."""
-
-        with tempfile.NamedTemporaryFile() as output_file:
-            result = self._run_shim(
-                "scripts/orchestration/prepare-workflow-build.sh",
-                {
-                    "CONTAINER_TYPE": "core",
-                    "IMAGE_PREFIX": "hpc-ai-adv-dev/sst",
-                    "BUILD_PLATFORMS": "linux/amd64,linux/arm64",
-                    "TAG_SUFFIX": "15.1.2",
-                    "REGISTRY": "ghcr.io",
-                    "SST_VERSION": "15.1.2",
-                    "TAG_AS_LATEST": "true",
-                    "GITHUB_OUTPUT": output_file.name,
-                },
-            )
-
-            written = Path(output_file.name).read_text(encoding="utf-8")
-
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("resolved_tag_suffix=15.1.2", written)
-        alias_tags_line = next(
-            line for line in written.splitlines() if line.startswith("alias_tags_json=")
-        )
-        self.assertEqual(
-            json.loads(alias_tags_line.split("=", 1)[1]),
-            ["ghcr.io/hpc-ai-adv-dev/sst-core:latest"],
-        )
-
-    def test_prepare_workflow_build_shim_emits_master_latest_alias_output(self) -> None:
-        """The workflow planner shim should expose master-latest aliases for nightly-style requests."""
-
-        with tempfile.NamedTemporaryFile() as output_file:
-            result = self._run_shim(
-                "scripts/orchestration/prepare-workflow-build.sh",
-                {
-                    "CONTAINER_TYPE": "core",
-                    "IMAGE_PREFIX": "hpc-ai-adv-dev/sst",
-                    "BUILD_PLATFORMS": "linux/amd64,linux/arm64",
-                    "TAG_SUFFIX": "master-abc1234",
-                    "REGISTRY": "ghcr.io",
-                    "SST_CORE_REPO": "https://github.com/sstsimulator/sst-core.git",
-                    "SST_CORE_REF": "abc1234",
-                    "PUBLISH_MASTER_LATEST": "true",
-                    "GITHUB_OUTPUT": output_file.name,
-                },
-            )
-
-            written = Path(output_file.name).read_text(encoding="utf-8")
-
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("resolved_tag_suffix=master-abc1234", written)
-        alias_tags_line = next(
-            line for line in written.splitlines() if line.startswith("alias_tags_json=")
-        )
-        self.assertEqual(
-            json.loads(alias_tags_line.split("=", 1)[1]),
-            ["ghcr.io/hpc-ai-adv-dev/sst-core:master-latest"],
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,12 +10,12 @@ import re
 import ssl
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from .build_spec import (
     BuildSourceSpec,
@@ -587,6 +587,27 @@ def inspect_remote_manifest(engine: str, image_ref: str) -> bool:
     return result.returncode == 0
 
 
+def collect_verified_manifest_images(
+    manifest_tag: str,
+    platforms: str,
+    engine: str = "docker",
+) -> tuple[str, ...]:
+    """Return the verified per-platform image tags for a planned manifest."""
+
+    if not manifest_tag or not platforms:
+        return ()
+
+    verified_images: list[str] = []
+    for platform_name in normalize_build_platforms(platforms):
+        candidate_tag = f"{manifest_tag}-{platform_to_arch(platform_name)}"
+        if inspect_remote_manifest(engine, candidate_tag):
+            verified_images.append(candidate_tag)
+        else:
+            log_warning(f"Skipping missing platform image {candidate_tag}")
+
+    return tuple(verified_images)
+
+
 def resolve_base_image_reference(base_image: str, default_owner: str) -> str:
     """Resolve a short image name into a concrete registry reference."""
 
@@ -700,7 +721,6 @@ def _verification_spec(
         mode=validation_mode,
         max_size_mb=get_default_size_limit(container_type),
         platforms=(target_platform,),
-        requires_runtime_validation=validation_mode == "full",
     )
 
 
@@ -1111,7 +1131,6 @@ def plan_workflow_build_spec(
         mode=normalized_request.validation_mode,
         max_size_mb=get_default_size_limit(normalized_request.container_type),
         platforms=platforms,
-        requires_runtime_validation=normalized_request.validation_mode == "full",
     )
 
     if normalized_request.container_type == "dev":
@@ -1191,7 +1210,7 @@ def plan_workflow_build_spec(
             )
 
         has_custom_containerfile = (experiment_dir / "Containerfile").is_file()
-        build_args: list[str] = []
+        build_args = []
         resolved_base_image = ""
         if has_custom_containerfile:
             containerfile_path = f"{normalized_request.experiment_name}/Containerfile"
@@ -1506,7 +1525,7 @@ def _download_file_url(url: str, destination: Path) -> None:
     try:
         with urllib.request.urlopen(
             request,
-            context=ssl._create_unverified_context(),
+            context=ssl.create_default_context(),
         ) as response:
             with destination.open("wb") as handle:
                 shutil.copyfileobj(response, handle)
@@ -1552,7 +1571,7 @@ def download_tarballs(
     if download_sst_core and not force_mode and sst_version not in VALID_SST_VERSIONS:
         log_warning(f"SST version {sst_version} may not be valid.")
         log_warning(f"Known valid versions: {' '.join(VALID_SST_VERSIONS)}")
-        log_warning("Continuing anyway... (use --force to suppress this warning)")
+        log_warning("Continuing anyway...")
 
     log_info("==================================================")
     log_info("SST Container Source Download Script")
@@ -1683,15 +1702,6 @@ def _remove_last_built_image() -> None:
     marker_path = _last_built_image_path()
     if marker_path.exists():
         marker_path.unlink()
-
-
-def _build_delegate_env() -> dict[str, str]:
-    """Create an environment for delegated shell entrypoints."""
-
-    env = os.environ.copy()
-    env["PYTHON_BIN"] = sys.executable
-    env["PYTHONPATH"] = str(REPO_ROOT)
-    return env
 
 
 def _download_local_build_sources(
@@ -2246,39 +2256,7 @@ def local_build(request: LocalBuildRequest) -> LocalBuildResult:
         raise
 
 
-def local_build_from_env() -> LocalBuildResult:
-    """Execute the local-build path from normalized environment variables."""
-
-    sst_version = os.environ.get("SST_VERSION", DEFAULT_SST_VERSION)
-    request = LocalBuildRequest(
-        container_type=os.environ.get("CONTAINER_TYPE", ""),
-        validate_only=os.environ.get("VALIDATE_ONLY", "false") == "true",
-        validation_mode=os.environ.get("VALIDATION_MODE", "full"),
-        cleanup=os.environ.get("CLEANUP", "false") == "true",
-        registry=os.environ.get("REGISTRY", DEFAULT_REGISTRY),
-        sst_version=sst_version,
-        sst_elements_version=os.environ.get("SST_ELEMENTS_VERSION", sst_version),
-        mpich_version=os.environ.get("MPICH_VERSION", DEFAULT_MPICH_VERSION),
-        build_ncpus=os.environ.get("BUILD_NCPUS", DEFAULT_BUILD_NCPUS),
-        target_platform=os.environ.get("TARGET_PLATFORM", ""),
-        enable_perf_tracking=os.environ.get("ENABLE_PERF_TRACKING", "false") == "true",
-        tag_suffix=os.environ.get("TAG_SUFFIX", ""),
-        tag_suffix_set=os.environ.get("TAG_SUFFIX_SET", "false") == "true",
-        no_cache=os.environ.get("NO_CACHE", "false") == "true",
-        experiment_name=os.environ.get("EXPERIMENT_NAME", ""),
-        base_image=os.environ.get("BASE_IMAGE", ""),
-        sst_core_path=os.environ.get("SST_CORE_PATH", ""),
-        sst_core_repo=os.environ.get("SST_CORE_REPO", DEFAULT_SST_CORE_REPO),
-        sst_core_ref=os.environ.get("SST_CORE_REF", ""),
-        sst_elements_repo=os.environ.get("SST_ELEMENTS_REPO", ""),
-        sst_elements_ref=os.environ.get("SST_ELEMENTS_REF", ""),
-        container_engine=os.environ.get("CONTAINER_ENGINE"),
-        download_script=os.environ.get("DOWNLOAD_SCRIPT", ""),
-    )
-    return local_build(request)
-
-
-def _inspect_image_json(engine: str, image_tag: str) -> dict:
+def _inspect_image_json(engine: str, image_tag: str) -> dict[str, Any]:
     """Inspect an image and return the decoded JSON metadata."""
 
     inspect_result = _run_command([engine, "image", "inspect", image_tag], capture_output=True)
@@ -2296,7 +2274,7 @@ def _inspect_image_json(engine: str, image_tag: str) -> dict:
     return payload[0]
 
 
-def _image_size_mb_from_metadata(metadata: dict) -> int:
+def _image_size_mb_from_metadata(metadata: dict[str, Any]) -> int:
     """Extract image size in MB from container metadata."""
 
     return int(metadata.get("Size", 0)) // 1024 // 1024
@@ -2425,45 +2403,6 @@ def _validate_container(
         platform=target_platform,
         image_size_mb=image_size_mb,
     )
-
-
-def _detect_experiment_containerfile_type(
-    experiment_name: str,
-    base_image: str,
-    container_engine: str | None,
-    *,
-    validate_base_image: bool = True,
-) -> str:
-    """Determine whether an experiment uses a custom or template Containerfile."""
-
-    log_info("Validating experiment configuration...")
-    experiment_dir = REPO_ROOT / experiment_name
-    if not experiment_dir.is_dir():
-        raise OrchestrationError(f"Experiment directory '{experiment_name}' not found")
-
-    log_info(f"Experiment directory exists: {experiment_name}")
-    if (experiment_dir / "Containerfile").is_file():
-        log_info("Using custom Containerfile from experiment directory")
-        return "custom"
-
-    log_info("Using template Containerfile.experiment")
-    if base_image:
-        resolved_image = resolve_base_image_reference(base_image, os.environ.get("USER", ""))
-        log_info(f"Resolved base image: {resolved_image}")
-        if validate_base_image:
-            if container_engine is None:
-                raise ValueError("Container engine is required to validate experiment base images")
-            if not inspect_remote_manifest(container_engine, resolved_image):
-                raise OrchestrationError(
-                    f"Base image not found: {resolved_image}\n"
-                    "For images in this repository, use format: sst-core:latest\n"
-                    "For external images, use full path: ghcr.io/username/image:tag"
-                )
-            log_info("Base image is accessible")
-        else:
-            log_info("Skipping remote base-image verification during planning")
-
-    return "template"
 
 
 def experiment_build(request: ExperimentBuildRequest) -> ExperimentBuildResult:
