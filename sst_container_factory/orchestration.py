@@ -953,17 +953,42 @@ def _workflow_platform_builds(
     return tuple(platform_builds)
 
 
-def _workflow_bake_path(path: str) -> str:
-    """Normalize workflow build paths for emission in Buildx bake files."""
+def _workflow_bake_context_path(path: str, workspace_root: Path) -> str:
+    """Normalize workflow build contexts for emission in Buildx bake files."""
 
     candidate = Path(path)
     if not candidate.is_absolute():
         return path
 
     try:
-        return str(candidate.relative_to(REPO_ROOT)) or "."
+        return str(candidate.relative_to(workspace_root)) or "."
     except ValueError:
         return path
+
+
+def _workflow_bake_dockerfile_path(
+    dockerfile_path: str,
+    docker_context: str,
+    workspace_root: Path,
+) -> str:
+    """Resolve a Dockerfile path the way Buildx bake expects it."""
+
+    context_candidate = Path(docker_context)
+    if context_candidate.is_absolute():
+        resolved_context = context_candidate
+    else:
+        resolved_context = (workspace_root / context_candidate).resolve()
+
+    dockerfile_candidate = Path(dockerfile_path)
+    if dockerfile_candidate.is_absolute():
+        resolved_dockerfile = dockerfile_candidate
+    else:
+        resolved_dockerfile = (workspace_root / dockerfile_candidate).resolve()
+
+    try:
+        return str(resolved_dockerfile.relative_to(resolved_context)) or "."
+    except ValueError:
+        return str(resolved_dockerfile)
 
 
 def _key_value_mapping(entries: tuple[str, ...]) -> dict[str, str]:
@@ -988,6 +1013,7 @@ def plan_workflow_bake(
     build_spec: BuildSpec,
     *,
     labels: Mapping[str, str] | None = None,
+    workspace_root: Path = REPO_ROOT,
 ) -> WorkflowBakePlan:
     """Convert a workflow build spec into a Buildx bake definition."""
 
@@ -1002,8 +1028,12 @@ def plan_workflow_bake(
         target_name = _workflow_bake_target_name(build_spec, platform_build)
         cache_scope = f"{build_spec.container_type}-{build_spec.tag_suffix}-{platform_build.arch}"
         target_definition: dict[str, object] = {
-            "context": _workflow_bake_path(platform_build.docker_context),
-            "dockerfile": _workflow_bake_path(platform_build.containerfile_path),
+            "context": _workflow_bake_context_path(platform_build.docker_context, workspace_root),
+            "dockerfile": _workflow_bake_dockerfile_path(
+                platform_build.containerfile_path,
+                platform_build.docker_context,
+                workspace_root,
+            ),
             "platforms": [platform_build.platform],
             "tags": [platform_build.image_tag],
             "cache-from": [f"type=gha,scope={cache_scope}"],

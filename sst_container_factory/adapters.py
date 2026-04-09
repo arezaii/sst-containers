@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import asdict
+from pathlib import Path
 
 from . import orchestration as orchestration_module
 from .github_actions import end_group, set_output, start_group
@@ -177,6 +178,7 @@ def prepare_workflow_build_from_env(env: Mapping[str, str] | None = None) -> orc
     bake_plan = orchestration_module.plan_workflow_bake(
         build_spec,
         labels=_workflow_build_labels(env_map, build_spec),
+        workspace_root=Path(env_map.get("GITHUB_WORKSPACE", str(orchestration_module.REPO_ROOT))),
     )
     source_download = build_spec.source_download
     platform_matrix = {
