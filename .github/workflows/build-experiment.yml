@@ -34,30 +34,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  validate-experiment:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      experiment_exists: ${{ steps.check.outputs.experiment_exists }}
-      has_containerfile: ${{ steps.check.outputs.has_containerfile }}
-      files_count: ${{ steps.check.outputs.files_count }}
-      resolved_base_image: ${{ steps.check.outputs.resolved_base_image }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Validate experiment directory
-        id: check
-        env:
-          EXPERIMENT_NAME: ${{ inputs.experiment_name }}
-          BASE_IMAGE: ${{ inputs.base_image }}
-          REPO_OWNER: ${{ github.repository_owner }}
-        run: ./scripts/orchestration/validate-experiment-inputs.sh
-
   build-experiment-containers:
-    needs: [validate-experiment]
-    if: needs.validate-experiment.outputs.experiment_exists == 'true'
     uses: ./.github/workflows/_reusable-build-containers.yml
     permissions:
       contents: read
@@ -68,9 +45,7 @@ jobs:
       tag_suffix: '${{ inputs.tag_suffix }}'
       build_platforms: '${{ inputs.build_platforms }}'
       experiment_name: '${{ inputs.experiment_name }}'
-      base_image: '${{ needs.validate-experiment.outputs.resolved_base_image || inputs.base_image }}'
-      containerfile_path: ${{ needs.validate-experiment.outputs.has_containerfile == 'true' && format('{0}/Containerfile', inputs.experiment_name) || 'Containerfiles/Containerfile.experiment' }}
-      docker_context: '${{ inputs.experiment_name }}'
+      base_image: '${{ inputs.base_image }}'
     secrets: inherit
 
   validate-experiment-containers:
@@ -84,12 +59,13 @@ jobs:
       container_type: 'experiment'
       image_tags: '${{ needs.build-experiment-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      max_image_size_mb: 8192  # 8GB for experiments
+      max_image_size_mb: ${{ fromJson(needs.build-experiment-containers.outputs.max_image_size_mb) }}
+      validation_mode: '${{ needs.build-experiment-containers.outputs.validation_mode }}'
     secrets: inherit
 
   generate-summary:
     uses: ./.github/workflows/_reusable-generate-summary.yml
-    needs: [validate-experiment, build-experiment-containers, validate-experiment-containers]
+    needs: [build-experiment-containers, validate-experiment-containers]
     if: always()
     with:
       workflow_type: 'experiment'
@@ -100,5 +76,6 @@ jobs:
       manifest_tag: '${{ needs.build-experiment-containers.outputs.manifest_tag }}'
       built_images: '${{ needs.build-experiment-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      tag_suffix: '${{ inputs.tag_suffix }}'
+      tag_suffix: '${{ needs.build-experiment-containers.outputs.resolved_tag_suffix }}'
+      alias_tags_json: '${{ needs.build-experiment-containers.outputs.alias_tags_json }}'
       experiment_name: '${{ inputs.experiment_name }}'

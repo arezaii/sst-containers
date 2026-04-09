@@ -56,37 +56,15 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  validate-inputs:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      build_type: ${{ steps.validate.outputs.build_type }}
-      tag_suffix: ${{ steps.validate.outputs.tag_suffix }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Validate inputs and determine build parameters
-        id: validate
-        env:
-          CORE_REF: ${{ inputs.sst_core_ref }}
-          ELEMENTS_REPO: ${{ inputs.sst_elements_repo }}
-          ELEMENTS_REF: ${{ inputs.sst_elements_ref }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: ./scripts/orchestration/validate-custom-inputs.sh
-
   build-custom-containers:
-    needs: [validate-inputs]
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/_reusable-build-containers.yml
     with:
       container_type: 'custom'
-      build_target: ${{ format('{0}-build', needs.validate-inputs.outputs.build_type) }}
       image_prefix: '${{ github.repository_owner }}/${{ inputs.image_name }}'
-      tag_suffix: '${{ needs.validate-inputs.outputs.tag_suffix }}'
+      tag_suffix: '${{ inputs.image_tag }}'
       build_platforms: '${{ inputs.build_platforms }}'
       mpich_version: '${{ inputs.mpich_version }}'
       sst_core_repo: '${{ inputs.sst_core_repo }}'
@@ -94,8 +72,6 @@ jobs:
       sst_elements_repo: '${{ inputs.sst_elements_repo }}'
       sst_elements_ref: '${{ inputs.sst_elements_ref }}'
       enable_perf_tracking: ${{ inputs.enable_perf_tracking }}
-      containerfile_path: 'Containerfiles/Containerfile.tag'
-      docker_context: 'Containerfiles'
     secrets: inherit
 
   validate-custom-containers:
@@ -109,12 +85,13 @@ jobs:
       container_type: 'custom'
       image_tags: '${{ needs.build-custom-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      max_image_size_mb: 4096
+      max_image_size_mb: ${{ fromJson(needs.build-custom-containers.outputs.max_image_size_mb) }}
+      validation_mode: '${{ needs.build-custom-containers.outputs.validation_mode }}'
     secrets: inherit
 
   generate-summary:
     uses: ./.github/workflows/_reusable-generate-summary.yml
-    needs: [validate-inputs, build-custom-containers, validate-custom-containers]
+    needs: [build-custom-containers, validate-custom-containers]
     if: always()
     with:
       workflow_type: 'custom'
@@ -125,5 +102,6 @@ jobs:
       manifest_tag: '${{ needs.build-custom-containers.outputs.manifest_tag }}'
       built_images: '${{ needs.build-custom-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      tag_suffix: '${{ needs.validate-inputs.outputs.tag_suffix }}'
+      tag_suffix: '${{ needs.build-custom-containers.outputs.resolved_tag_suffix }}'
+      alias_tags_json: '${{ needs.build-custom-containers.outputs.alias_tags_json }}'
       mpich_version: '${{ inputs.mpich_version }}'

@@ -64,6 +64,11 @@ on:
         required: false
         type: string
 
+      alias_tags_json:
+        description: 'JSON array of alias manifest tags'
+        required: false
+        type: string
+
       mpich_version:
         description: 'MPICH version used'
         required: false
@@ -139,6 +144,16 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Multi-architecture manifest (recommended):**" >> $GITHUB_STEP_SUMMARY
             echo "- \`${{ inputs.manifest_tag }}\`" >> $GITHUB_STEP_SUMMARY
+
+            ALIAS_TAGS='${{ inputs.alias_tags_json }}'
+            if [[ -n "$ALIAS_TAGS" ]] && [[ "$ALIAS_TAGS" != 'null' ]] && [[ "$(echo "$ALIAS_TAGS" | jq 'length')" -gt 0 ]]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**Alias manifests:**" >> $GITHUB_STEP_SUMMARY
+              echo "$ALIAS_TAGS" | jq -r '.[]' | while read -r alias_tag; do
+                echo "- \`${alias_tag}\`" >> $GITHUB_STEP_SUMMARY
+              done
+            fi
+
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Architecture-specific images:**" >> $GITHUB_STEP_SUMMARY
 

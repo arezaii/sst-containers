@@ -6,11 +6,24 @@ import json
 import os
 import platform
 import re
+import ssl
 import shutil
 import subprocess
-from dataclasses import dataclass
+import sys
+import tempfile
+import time
+import urllib.request
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from .build_spec import (
+    BuildSourceSpec,
+    BuildSpec,
+    PlatformBuildSpec,
+    PublicationSpec,
+    SourceDownloadSpec,
+    VerificationSpec,
+)
 from .github_actions import end_group, set_output, start_group
 from .logging_utils import log_error, log_info, log_success, log_warning
 
@@ -27,10 +40,33 @@ DOCKER_LIBRARY_IMAGES = {
 }
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_REGISTRY = "localhost:5000"
+DEFAULT_MPICH_VERSION = "4.0.2"
+DEFAULT_BUILD_NCPUS = "4"
+DEFAULT_SST_VERSION = "15.1.2"
+DEFAULT_SST_CORE_REPO = "https://github.com/sstsimulator/sst-core.git"
+DEFAULT_SST_ELEMENTS_REPO = "https://github.com/sstsimulator/sst-elements.git"
+VALID_SST_VERSIONS = (
+    "14.0.0",
+    "14.1.0",
+    "15.0.0",
+    "15.1.0",
+    "15.1.1",
+    "15.1.2",
+)
+DEFAULT_SIZE_LIMITS_MB = {
+    "core": 2048,
+    "full": 4096,
+    "dev": 4096,
+    "custom": 4096,
+    "experiment": 8192,
+}
+LOCAL_SOURCE_STAGE_ROOT_REL = ".local-sources"
+LOCAL_SST_CORE_STAGE_REL = f"{LOCAL_SOURCE_STAGE_ROOT_REL}/sst-core"
 
 
 class OrchestrationError(RuntimeError):
-    """Raised when orchestration validation fails."""
+    """Raised when orchestration runtime operations fail."""
 
 
 @dataclass(frozen=True)
@@ -81,6 +117,138 @@ class ExperimentBuildResult:
     docker_context: str
 
 
+@dataclass(frozen=True)
+class ExperimentBuildRequest:
+    """Explicit experiment build inputs."""
+
+    experiment_name: str
+    build_platforms: str
+    registry: str = DEFAULT_REGISTRY
+    tag_suffix: str = "latest"
+    validation_mode: str = "full"
+    no_cache: bool = False
+    base_image: str = ""
+    container_engine: str | None = None
+    build_args: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DownloadTarballsResult:
+    """Resolved tarball download outputs."""
+
+    requested_files: tuple[str, ...]
+    total_size_mb: int
+    destination_dir: str
+
+
+@dataclass(frozen=True)
+class CustomBuildResult:
+    """Resolved custom build outputs."""
+
+    image_tag: str
+    build_type: str
+    image_size_mb: int
+
+
+@dataclass(frozen=True)
+class CustomBuildRequest:
+    """Explicit custom build inputs."""
+
+    target_platform: str
+    tag_suffix: str
+    sst_core_ref: str = ""
+    sst_core_repo: str = DEFAULT_SST_CORE_REPO
+    sst_core_path: str = ""
+    sst_elements_repo: str = ""
+    sst_elements_ref: str = ""
+    mpich_version: str = DEFAULT_MPICH_VERSION
+    build_ncpus: str = DEFAULT_BUILD_NCPUS
+    registry: str = DEFAULT_REGISTRY
+    enable_perf_tracking: bool = False
+    no_cache: bool = False
+    cleanup: bool = False
+    validation_mode: str = "none"
+    container_engine: str | None = None
+    github_actions_mode: bool = False
+
+
+@dataclass(frozen=True)
+class LocalBuildResult:
+    """Resolved local build outputs."""
+
+    image_tag: str
+    container_type: str
+    image_size_mb: int | None
+
+
+@dataclass(frozen=True)
+class LocalBuildRequest:
+    """Explicit local-build inputs."""
+
+    container_type: str
+    target_platform: str
+    validation_mode: str = "full"
+    registry: str = DEFAULT_REGISTRY
+    sst_version: str = DEFAULT_SST_VERSION
+    sst_elements_version: str = DEFAULT_SST_VERSION
+    mpich_version: str = DEFAULT_MPICH_VERSION
+    build_ncpus: str = DEFAULT_BUILD_NCPUS
+    tag_suffix: str = "latest"
+    tag_suffix_set: bool = False
+    validate_only: bool = False
+    cleanup: bool = False
+    enable_perf_tracking: bool = False
+    no_cache: bool = False
+    container_engine: str | None = None
+    experiment_name: str = ""
+    base_image: str = ""
+    sst_core_path: str = ""
+    sst_core_repo: str = DEFAULT_SST_CORE_REPO
+    sst_core_ref: str = ""
+    sst_elements_repo: str = ""
+    sst_elements_ref: str = ""
+    download_script: str = ""
+
+
+@dataclass(frozen=True)
+class WorkflowBuildRequest:
+    """Explicit reusable-workflow build inputs."""
+
+    container_type: str
+    image_prefix: str
+    build_platforms: str
+    tag_suffix: str = ""
+    registry: str = "ghcr.io"
+    sst_version: str = ""
+    sst_elements_version: str = ""
+    mpich_version: str = DEFAULT_MPICH_VERSION
+    build_ncpus: str = DEFAULT_BUILD_NCPUS
+    sst_core_repo: str = DEFAULT_SST_CORE_REPO
+    sst_core_ref: str = ""
+    sst_elements_repo: str = ""
+    sst_elements_ref: str = ""
+    experiment_name: str = ""
+    base_image: str = ""
+    enable_perf_tracking: bool = False
+    no_cache: bool = False
+    validation_mode: str = "full"
+    tag_as_latest: bool = False
+    publish_master_latest: bool = False
+
+
+@dataclass(frozen=True)
+class _ContainerBuildPlan:
+    """Concrete inputs for invoking one container build."""
+
+    image_tag: str
+    containerfile: str
+    docker_context: str
+    target_platform: str
+    build_target: str = ""
+    build_args: tuple[str, ...] = ()
+    no_cache: bool = False
+
+
 def detect_container_engine(explicit_engine: str | None = None) -> str:
     """Return the most appropriate container engine available on the host."""
 
@@ -88,7 +256,7 @@ def detect_container_engine(explicit_engine: str | None = None) -> str:
     if requested:
         if shutil.which(requested):
             return requested
-        raise OrchestrationError(f"Container engine not found: {requested}")
+        raise FileNotFoundError(f"Container engine not found: {requested}")
 
     if os.environ.get("GITHUB_ACTIONS") == "true" and shutil.which("docker"):
         return "docker"
@@ -99,7 +267,306 @@ def detect_container_engine(explicit_engine: str | None = None) -> str:
         if shutil.which(candidate):
             return candidate
 
-    raise OrchestrationError("No container engine found")
+    raise FileNotFoundError("No container engine found")
+
+
+def detect_host_platform() -> str:
+    """Detect the canonical host platform string."""
+
+    machine = platform.machine().lower()
+    if machine == "x86_64":
+        return "linux/amd64"
+    if machine in {"aarch64", "arm64"}:
+        return "linux/arm64"
+    raise ValueError(f"Unsupported platform: {machine}")
+
+
+def normalize_platform(target_platform: str) -> str:
+    """Normalize platform aliases to canonical Linux platform strings."""
+
+    normalized = target_platform.strip().lower()
+    if normalized in {"x86_64", "amd64", "linux/amd64"}:
+        return "linux/amd64"
+    if normalized in {"aarch64", "arm64", "linux/arm64"}:
+        return "linux/arm64"
+    raise ValueError(
+        f"Unsupported platform: {target_platform}\n"
+        "Supported platforms: x86_64, arm64, linux/amd64, linux/arm64"
+    )
+
+
+def require_host_platform(target_platform: str) -> str:
+    """Validate that a target platform matches the current host platform."""
+
+    normalized_platform = normalize_platform(target_platform)
+    if normalized_platform != detect_host_platform():
+        raise ValueError("Cross-platform builds are not supported by this script")
+    return normalized_platform
+
+
+def require_single_host_platform(build_platforms: str) -> str:
+    """Validate that a platform list represents exactly one host-matching platform."""
+
+    if "," in build_platforms:
+        raise ValueError("Multi-platform builds are not supported by this script")
+    return require_host_platform(build_platforms)
+
+
+def normalize_build_platforms(build_platforms: str) -> tuple[str, ...]:
+    """Normalize a comma-separated platform list into canonical Linux platforms."""
+
+    normalized_platforms: list[str] = []
+    for raw_platform in build_platforms.split(","):
+        trimmed_platform = raw_platform.strip()
+        if not trimmed_platform:
+            continue
+        normalized_platform = normalize_platform(trimmed_platform)
+        if normalized_platform not in normalized_platforms:
+            normalized_platforms.append(normalized_platform)
+
+    if not normalized_platforms:
+        raise ValueError("At least one build platform is required")
+
+    return tuple(normalized_platforms)
+
+
+def validate_url(url: str, description: str) -> None:
+    """Validate a repository URL."""
+
+    if not url:
+        raise ValueError(f"{description} is required")
+    if not re.match(r"^https?://.*$", url):
+        raise ValueError(
+            f"Invalid {description} format: {url}\nURL must start with http:// or https://"
+        )
+
+
+def validate_git_ref(ref: str, description: str) -> None:
+    """Validate a git reference string."""
+
+    if not ref:
+        raise ValueError(f"{description} is required")
+    if re.search(r"\s", ref):
+        raise ValueError(
+            f"Invalid {description} format: '{ref}'\nGit references cannot contain spaces"
+        )
+    if re.search(r"[<>|&$`]", ref):
+        raise ValueError(
+            f"Invalid {description} format: '{ref}'\n"
+            "Git references cannot contain shell special characters"
+        )
+
+
+def _local_sst_core_stage_dir() -> Path:
+    """Return the local SST-core stage directory inside the build context."""
+
+    return REPO_ROOT / "Containerfiles" / LOCAL_SST_CORE_STAGE_REL
+
+
+def reset_local_source_stage_dir(stage_dir: Path | None = None) -> Path:
+    """Reset the stage directory back to its placeholder layout."""
+
+    resolved_stage_dir = stage_dir or _local_sst_core_stage_dir()
+    shutil.rmtree(resolved_stage_dir, ignore_errors=True)
+    resolved_stage_dir.mkdir(parents=True, exist_ok=True)
+    (resolved_stage_dir / ".gitkeep").write_text("", encoding="utf-8")
+    return resolved_stage_dir
+
+
+def validate_local_sst_core_checkout(source_dir: str) -> Path:
+    """Validate that a local path looks like an SST-core checkout."""
+
+    source_path = Path(source_dir)
+    if not source_path.is_dir():
+        raise FileNotFoundError(
+            f"Local SST-core checkout (--core-path) not found: {source_dir}"
+        )
+
+    resolved_source_dir = source_path.resolve()
+    if not (resolved_source_dir / "autogen.sh").is_file():
+        raise ValueError(
+            "Local SST-core checkout (--core-path) is missing autogen.sh: "
+            f"{resolved_source_dir}"
+        )
+    if not (
+        (resolved_source_dir / "configure.ac").is_file()
+        or (resolved_source_dir / "configure.ac.in").is_file()
+    ):
+        raise ValueError(
+            "Local SST-core checkout (--core-path) does not look like an SST-core "
+            f"source tree: {resolved_source_dir}"
+        )
+    return resolved_source_dir
+
+
+def _is_git_work_tree(source_dir: Path) -> bool:
+    """Return whether a source directory is a git worktree."""
+
+    result = _run_command(
+        ["git", "-C", str(source_dir), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _git_has_head(source_dir: Path) -> bool:
+    """Return whether a git worktree has a valid HEAD."""
+
+    result = _run_command(
+        ["git", "-C", str(source_dir), "rev-parse", "--verify", "HEAD"],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _stage_git_work_tree(source_dir: Path, stage_dir: Path) -> None:
+    """Stage tracked files and local changes from a git worktree."""
+
+    file_descriptor, temp_index = tempfile.mkstemp(
+        prefix="sst-core-stage-index.",
+        dir=os.environ.get("TMPDIR", None),
+    )
+    os.close(file_descriptor)
+    env = os.environ.copy()
+    env["GIT_INDEX_FILE"] = temp_index
+
+    try:
+        for command in [
+            ["git", "-C", str(source_dir), "read-tree", "HEAD"],
+            ["git", "-C", str(source_dir), "add", "-A", "."],
+            [
+                "git",
+                "-C",
+                str(source_dir),
+                "checkout-index",
+                "--all",
+                "--force",
+                f"--prefix={stage_dir}/",
+            ],
+        ]:
+            result = _run_command(command, env=env, capture_output=True)
+            if result.returncode != 0:
+                raise OrchestrationError("Failed to stage local SST-core checkout into build context")
+    finally:
+        Path(temp_index).unlink(missing_ok=True)
+
+
+def _copy_tree_without_git(source_dir: Path, stage_dir: Path) -> None:
+    """Copy a source tree into the stage directory while excluding .git metadata."""
+
+    for child in source_dir.iterdir():
+        if child.name == ".git":
+            continue
+        destination = stage_dir / child.name
+        if child.is_dir():
+            shutil.copytree(child, destination, symlinks=True)
+        else:
+            shutil.copy2(child, destination)
+
+
+def stage_local_sst_core_checkout(source_dir: str, stage_dir: Path | None = None) -> Path:
+    """Stage a local SST-core checkout into the container build context."""
+
+    resolved_source_dir = validate_local_sst_core_checkout(source_dir)
+    resolved_stage_dir = reset_local_source_stage_dir(stage_dir)
+
+    if _is_git_work_tree(resolved_source_dir) and _git_has_head(resolved_source_dir):
+        _stage_git_work_tree(resolved_source_dir, resolved_stage_dir)
+    else:
+        _copy_tree_without_git(resolved_source_dir, resolved_stage_dir)
+
+    if not (resolved_stage_dir / "autogen.sh").is_file():
+        raise OrchestrationError(
+            "Failed to stage local SST-core checkout into build context: "
+            f"{resolved_stage_dir}"
+        )
+
+    log_info(f"Staged local SST-core checkout: {resolved_source_dir}")
+    return resolved_stage_dir
+
+
+def normalize_custom_build_request(request: CustomBuildRequest) -> CustomBuildRequest:
+    """Validate and normalize custom-build inputs."""
+
+    normalized_request = replace(request)
+    if normalized_request.sst_core_path:
+        if normalized_request.sst_core_ref:
+            raise ValueError("--core-ref cannot be combined with --core-path")
+        validate_local_sst_core_checkout(normalized_request.sst_core_path)
+    else:
+        validate_git_ref(normalized_request.sst_core_ref, "SST-core reference (--core-ref)")
+        validate_url(normalized_request.sst_core_repo, "SST-core repository URL")
+
+    if normalized_request.sst_elements_ref and not normalized_request.sst_elements_repo:
+        normalized_request = replace(
+            normalized_request,
+            sst_elements_repo=DEFAULT_SST_ELEMENTS_REPO,
+        )
+    if normalized_request.sst_elements_repo and not normalized_request.sst_elements_ref:
+        raise ValueError(
+            "SST-elements reference (--elements-ref) when elements repo is specified is required"
+        )
+    if normalized_request.sst_elements_repo:
+        validate_url(normalized_request.sst_elements_repo, "SST-elements repository URL")
+    if normalized_request.sst_elements_ref:
+        validate_git_ref(normalized_request.sst_elements_ref, "SST-elements reference")
+
+    normalized_platform = require_host_platform(
+        normalized_request.target_platform or detect_host_platform()
+    )
+
+    derived_tag_suffix = derive_custom_tag_suffix(
+        normalized_request.tag_suffix,
+        sst_core_path=normalized_request.sst_core_path,
+        sst_core_ref=normalized_request.sst_core_ref,
+        sst_elements_repo=normalized_request.sst_elements_repo,
+    )
+
+    return replace(
+        normalized_request,
+        target_platform=normalized_platform,
+        tag_suffix=derived_tag_suffix,
+    )
+
+
+def normalize_experiment_build_request(request: ExperimentBuildRequest) -> ExperimentBuildRequest:
+    """Validate and normalize experiment-build inputs."""
+
+    if not request.experiment_name:
+        raise ValueError("Experiment name is required")
+
+    return replace(
+        request,
+        base_image=request.base_image or "sst-core:latest",
+        build_platforms=require_single_host_platform(
+            request.build_platforms or detect_host_platform()
+        ),
+    )
+
+
+def normalize_local_build_request(request: LocalBuildRequest) -> LocalBuildRequest:
+    """Validate and normalize local-build inputs."""
+
+    if request.container_type not in {"core", "full", "dev", "custom", "experiment"}:
+        raise ValueError("Container type is required")
+    if request.validate_only and request.validation_mode == "none":
+        raise ValueError("--validate-only requires a validation mode other than none")
+    if not request.validate_only and request.sst_core_path and request.container_type != "custom":
+        raise ValueError("--core-path is only supported with CONTAINER_TYPE=custom")
+
+    normalized_platform = require_host_platform(request.target_platform or detect_host_platform())
+    normalized_request = replace(
+        request,
+        target_platform=normalized_platform,
+        sst_elements_version=request.sst_elements_version or request.sst_version,
+        tag_suffix=request.tag_suffix or "latest",
+    )
+
+    if normalized_request.container_type in {"core", "full"} and normalized_request.sst_version not in VALID_SST_VERSIONS:
+        log_warning(f"SST version {normalized_request.sst_version} may not be valid.")
+        log_warning(f"Known valid versions: {' '.join(VALID_SST_VERSIONS)}")
+
+    return normalized_request
 
 
 def inspect_remote_manifest(engine: str, image_ref: str) -> bool:
@@ -118,7 +585,7 @@ def resolve_base_image_reference(base_image: str, default_owner: str) -> str:
     """Resolve a short image name into a concrete registry reference."""
 
     if not base_image:
-        raise OrchestrationError("Base image cannot be empty")
+        raise ValueError("Base image cannot be empty")
 
     if "/" in base_image:
         return base_image
@@ -137,6 +604,24 @@ def sanitize_tag_suffix(raw_value: str) -> str:
     return sanitized[:50]
 
 
+def derive_custom_tag_suffix(
+    tag_suffix: str,
+    *,
+    sst_core_path: str = "",
+    sst_core_ref: str = "",
+    sst_elements_repo: str = "",
+) -> str:
+    """Return the effective tag suffix for custom-source builds."""
+
+    if tag_suffix:
+        return tag_suffix
+
+    base_suffix = "local" if sst_core_path else sanitize_tag_suffix(sst_core_ref)
+    if sst_elements_repo:
+        return f"{base_suffix}-full"
+    return base_suffix
+
+
 def platform_to_arch(target_platform: str) -> str:
     """Convert a Linux platform string into a short architecture label."""
 
@@ -147,7 +632,7 @@ def platform_to_arch(target_platform: str) -> str:
     try:
         return mapping[target_platform]
     except KeyError as error:
-        raise OrchestrationError(f"Invalid platform: {target_platform}") from error
+        raise ValueError(f"Invalid platform: {target_platform}") from error
 
 
 def generate_experiment_image_tag(
@@ -158,170 +643,1487 @@ def generate_experiment_image_tag(
     return f"{registry}/{experiment_name}:{tag_suffix}-{arch}"
 
 
-def prepare_image_config_from_env() -> PrepareImageConfigResult:
-    """Compute workflow image naming outputs from environment variables."""
+def generate_custom_image_tag(
+    registry: str,
+    tag_suffix: str,
+    arch: str,
+    enable_perf_tracking: bool,
+) -> str:
+    """Generate the canonical custom build image tag."""
 
-    container_type = os.environ.get("CONTAINER_TYPE", "")
-    image_prefix = os.environ.get("IMAGE_PREFIX", "")
-    tag_suffix = os.environ.get("TAG_SUFFIX", "")
-    registry = os.environ.get("REGISTRY", "ghcr.io")
-    enable_perf_tracking = os.environ.get("ENABLE_PERF_TRACKING", "false")
-    experiment_name = os.environ.get("EXPERIMENT_NAME", "")
+    image_name = "sst-perf-track-custom" if enable_perf_tracking else "sst-custom"
+    return f"{registry}/{image_name}:{tag_suffix}-{arch}"
 
-    if not container_type:
-        raise OrchestrationError("CONTAINER_TYPE is required")
-    if not image_prefix:
-        raise OrchestrationError("IMAGE_PREFIX is required")
-    if not tag_suffix:
-        raise OrchestrationError("TAG_SUFFIX is required")
 
-    start_group("Prepare Image Configuration")
-    log_info(f"Container type:      {container_type}")
-    log_info(f"Image prefix:        {image_prefix}")
-    log_info(f"Tag suffix:          {tag_suffix}")
-    log_info(f"Registry:            {registry}")
-    log_info(f"Perf tracking:       {enable_perf_tracking}")
+def generate_container_image_tag(
+    registry: str,
+    container_type: str,
+    tag_suffix: str,
+    arch: str,
+    enable_perf_tracking: bool = False,
+    experiment_name: str = "",
+) -> str:
+    """Generate the canonical local image tag for a container type."""
 
-    original_image_prefix = image_prefix
-    if enable_perf_tracking == "true" and container_type in {"core", "full", "custom"}:
-        image_prefix = f"{image_prefix}-perf-track"
-        log_info(f"Perf tracking enabled: image prefix modified to {image_prefix}")
+    if container_type == "experiment":
+        if not experiment_name:
+            raise ValueError("Experiment name is required for experiment image tags")
+        image_name = experiment_name
+    elif enable_perf_tracking and container_type != "dev":
+        image_name = f"sst-perf-track-{container_type}"
+    else:
+        image_name = f"sst-{container_type}"
 
-    result = PrepareImageConfigResult(
-        image_prefix=image_prefix,
-        core_full_pattern=f"{registry}/{image_prefix}-{container_type}:{tag_suffix}",
-        dev_custom_pattern=f"{registry}/{image_prefix}:{tag_suffix}",
-        experiment_pattern=f"{registry}/{original_image_prefix}/{experiment_name}:{tag_suffix}",
-        default_pattern=f"{registry}/{image_prefix}:{tag_suffix}",
+    return f"{registry}/{image_name}:{tag_suffix}-{arch}"
+
+
+def get_default_size_limit(container_type: str) -> int:
+    """Return the default image size limit in MB for a container type."""
+
+    return DEFAULT_SIZE_LIMITS_MB.get(container_type, DEFAULT_SIZE_LIMITS_MB["full"])
+
+
+def _verification_spec(
+    container_type: str,
+    validation_mode: str,
+    target_platform: str,
+) -> VerificationSpec:
+    """Create a validation plan for a logical build."""
+
+    return VerificationSpec(
+        mode=validation_mode,
+        max_size_mb=get_default_size_limit(container_type),
+        platforms=(target_platform,),
+        requires_runtime_validation=validation_mode == "full",
     )
 
-    log_info("Computed patterns:")
-    log_info(f"  core_full_pattern:   {result.core_full_pattern}")
-    log_info(f"  dev_custom_pattern:  {result.dev_custom_pattern}")
-    log_info(f"  experiment_pattern:  {result.experiment_pattern}")
-    log_info(f"  default_pattern:     {result.default_pattern}")
-    end_group()
 
-    set_output("image_prefix", result.image_prefix)
-    set_output("core_full_pattern", result.core_full_pattern)
-    set_output("dev_custom_pattern", result.dev_custom_pattern)
-    set_output("experiment_pattern", result.experiment_pattern)
-    set_output("default_pattern", result.default_pattern)
-    log_success("Image configuration complete")
-    return result
+def _local_publication_spec(image_tag: str) -> PublicationSpec:
+    """Create the default local-only publication plan."""
 
-
-def validate_custom_inputs_from_env() -> ValidateCustomInputsResult:
-    """Validate build-custom workflow inputs from environment variables."""
-
-    core_ref = os.environ.get("CORE_REF", "")
-    elements_repo = os.environ.get("ELEMENTS_REPO", "")
-    elements_ref = os.environ.get("ELEMENTS_REF", "")
-    image_tag = os.environ.get("IMAGE_TAG", "")
-
-    if not core_ref:
-        raise OrchestrationError("CORE_REF (sst_core_ref input) is required")
-
-    start_group("Validate Custom Build Inputs")
-    if elements_repo:
-        if not elements_ref:
-            raise OrchestrationError(
-                "SST-elements ref (ELEMENTS_REF) is required when elements_repo is provided"
-            )
-        build_type = "full"
-        log_info("Build type: full (core + elements)")
-    else:
-        build_type = "core"
-        log_info("Build type: core only")
-
-    tag_suffix = image_tag or sanitize_tag_suffix(core_ref)
-    if image_tag:
-        log_info(f"Tag suffix: {tag_suffix} (explicit)")
-    else:
-        log_info(f"Tag suffix: {tag_suffix} (derived from core ref)")
-    end_group()
-
-    result = ValidateCustomInputsResult(build_type=build_type, tag_suffix=tag_suffix)
-    set_output("build_type", result.build_type)
-    set_output("tag_suffix", result.tag_suffix)
-    log_success(
-        f"Input validation complete: build_type={result.build_type}, tag_suffix={result.tag_suffix}"
+    return PublicationSpec(
+        publish_enabled=False,
+        platform_tags=(image_tag,),
     )
-    return result
 
 
-def validate_experiment_inputs_from_env() -> ValidateExperimentInputsResult:
-    """Validate build-experiment workflow inputs from environment variables."""
+def _workflow_manifest_repository(
+    *,
+    registry: str,
+    image_prefix: str,
+    container_type: str,
+    enable_perf_tracking: bool,
+    experiment_name: str,
+) -> str:
+    """Return the manifest repository name for a workflow build."""
 
-    experiment_name = os.environ.get("EXPERIMENT_NAME", "")
-    base_image = os.environ.get("BASE_IMAGE", "sst-core:latest")
-    repo_owner = os.environ.get("REPO_OWNER", os.environ.get("USER", ""))
-    container_engine = detect_container_engine(os.environ.get("CONTAINER_ENGINE"))
+    adjusted_prefix = image_prefix
+    if enable_perf_tracking and container_type in {"core", "full", "custom"}:
+        adjusted_prefix = f"{image_prefix}-perf-track"
 
-    if not experiment_name:
-        raise OrchestrationError("EXPERIMENT_NAME is required")
+    if container_type in {"core", "full"}:
+        return f"{registry}/{adjusted_prefix}-{container_type}"
+    if container_type in {"dev", "custom"}:
+        return f"{registry}/{adjusted_prefix}"
+    if container_type == "experiment":
+        if not experiment_name:
+            raise ValueError("Experiment name is required for workflow experiment builds")
+        return f"{registry}/{image_prefix}/{experiment_name}"
 
-    start_group("Validate Experiment Inputs")
-    log_info(f"Experiment name: {experiment_name}")
+    raise ValueError(f"Unsupported workflow container type: {container_type}")
 
-    experiment_dir = REPO_ROOT / experiment_name
-    if not experiment_dir.is_dir():
-        log_error(f"Experiment directory '{experiment_name}' does not exist")
-        set_output("experiment_exists", "false")
-        end_group()
-        return ValidateExperimentInputsResult(
-            experiment_exists=False,
-            has_containerfile=False,
-            resolved_base_image="",
-            files_count=0,
+
+def _workflow_publication_spec(
+    manifest_tag: str,
+    platform_builds: tuple[PlatformBuildSpec, ...],
+    alias_tags: tuple[str, ...] = (),
+) -> PublicationSpec:
+    """Create the publication plan for workflow builds."""
+
+    return PublicationSpec(
+        publish_enabled=True,
+        manifest_tag=manifest_tag,
+        platform_tags=tuple(build.image_tag for build in platform_builds),
+        alias_tags=alias_tags,
+    )
+
+
+def _workflow_alias_tags(
+    request: WorkflowBuildRequest,
+    manifest_repository: str,
+) -> tuple[str, ...]:
+    """Return alias manifest tags requested for a workflow build."""
+
+    alias_tags: list[str] = []
+    if request.tag_as_latest:
+        alias_tags.append(f"{manifest_repository}:latest")
+    if request.publish_master_latest:
+        alias_tags.append(f"{manifest_repository}:master-latest")
+    return tuple(alias_tags)
+
+
+def normalize_workflow_build_request(request: WorkflowBuildRequest) -> WorkflowBuildRequest:
+    """Validate and normalize reusable-workflow build inputs."""
+
+    if request.container_type not in {"core", "full", "dev", "custom", "experiment"}:
+        raise ValueError("CONTAINER_TYPE is required")
+    if not request.image_prefix:
+        raise ValueError("IMAGE_PREFIX is required")
+
+    normalized_platforms = normalize_build_platforms(request.build_platforms)
+    normalized_request = replace(
+        request,
+        build_platforms=",".join(normalized_platforms),
+        registry=request.registry or "ghcr.io",
+        sst_elements_version=request.sst_elements_version or request.sst_version,
+        validation_mode=request.validation_mode or "full",
+    )
+
+    if normalized_request.container_type == "dev":
+        return replace(
+            normalized_request,
+            tag_suffix=normalized_request.tag_suffix or "latest",
         )
 
-    set_output("experiment_exists", "true")
-    log_info(f"Experiment directory found: {experiment_name}")
+    if normalized_request.container_type == "experiment":
+        if not normalized_request.experiment_name:
+            raise ValueError("EXPERIMENT_NAME is required")
+        return replace(
+            normalized_request,
+            tag_suffix=normalized_request.tag_suffix or "latest",
+            base_image=normalized_request.base_image or "sst-core:latest",
+        )
 
-    has_containerfile = (experiment_dir / "Containerfile").is_file()
-    resolved_base_image = ""
-    if has_containerfile:
-        log_info("Custom Containerfile found in experiment directory")
-        set_output("has_containerfile", "true")
-        set_output("resolved_base_image", "")
-    else:
-        log_info("No custom Containerfile - using template Containerfile.experiment")
-        set_output("has_containerfile", "false")
-        resolved_base_image = resolve_base_image_reference(base_image, repo_owner)
-        log_info(f"Resolved base image: {resolved_base_image}")
-        set_output("resolved_base_image", resolved_base_image)
-        if not inspect_remote_manifest(container_engine, resolved_base_image):
-            raise OrchestrationError(
-                "Base image not found or not accessible: "
-                f"{resolved_base_image}\n"
-                "For images in this repository, use format: sst-core:latest\n"
-                "For external images, use a full path: ghcr.io/username/image:tag"
+    if normalized_request.container_type == "custom":
+        validate_url(normalized_request.sst_core_repo, "SST-core repository URL")
+        validate_git_ref(normalized_request.sst_core_ref, "SST-core reference")
+        if normalized_request.sst_elements_ref and not normalized_request.sst_elements_repo:
+            normalized_request = replace(
+                normalized_request,
+                sst_elements_repo=DEFAULT_SST_ELEMENTS_REPO,
             )
-        log_success(f"Base image is accessible: {resolved_base_image}")
+        if normalized_request.sst_elements_repo and not normalized_request.sst_elements_ref:
+            raise ValueError("SST-elements reference is required when SST-elements repo is specified")
+        if normalized_request.sst_elements_repo:
+            validate_url(normalized_request.sst_elements_repo, "SST-elements repository URL")
+        if normalized_request.sst_elements_ref:
+            validate_git_ref(normalized_request.sst_elements_ref, "SST-elements reference")
+        return replace(
+            normalized_request,
+            tag_suffix=derive_custom_tag_suffix(
+                normalized_request.tag_suffix,
+                sst_core_ref=normalized_request.sst_core_ref,
+                sst_elements_repo=normalized_request.sst_elements_repo,
+            ),
+        )
 
-    files_count = sum(1 for path in experiment_dir.rglob("*") if path.is_file())
-    log_info(f"Files in experiment directory: {files_count}")
-    set_output("files_count", str(files_count))
-    end_group()
-    log_success(f"Experiment validation complete: {experiment_name}")
-    return ValidateExperimentInputsResult(
-        experiment_exists=True,
-        has_containerfile=has_containerfile,
-        resolved_base_image=resolved_base_image,
-        files_count=files_count,
+    if normalized_request.sst_version and normalized_request.sst_core_ref:
+        raise ValueError("SST release builds cannot combine SST version inputs with SST-core refs")
+
+    if normalized_request.sst_version:
+        if normalized_request.sst_version not in VALID_SST_VERSIONS:
+            log_warning(f"SST version {normalized_request.sst_version} may not be valid.")
+            log_warning(f"Known valid versions: {' '.join(VALID_SST_VERSIONS)}")
+        return replace(
+            normalized_request,
+            tag_suffix=normalized_request.tag_suffix or normalized_request.sst_version,
+        )
+
+    validate_url(normalized_request.sst_core_repo, "SST-core repository URL")
+    validate_git_ref(normalized_request.sst_core_ref, "SST-core reference")
+    if normalized_request.container_type == "full":
+        if normalized_request.sst_elements_ref and not normalized_request.sst_elements_repo:
+            normalized_request = replace(
+                normalized_request,
+                sst_elements_repo=DEFAULT_SST_ELEMENTS_REPO,
+            )
+        if normalized_request.sst_elements_repo and not normalized_request.sst_elements_ref:
+            raise ValueError("SST-elements reference is required when SST-elements repo is specified")
+        if normalized_request.sst_elements_repo:
+            validate_url(normalized_request.sst_elements_repo, "SST-elements repository URL")
+        if normalized_request.sst_elements_ref:
+            validate_git_ref(normalized_request.sst_elements_ref, "SST-elements reference")
+
+    return replace(
+        normalized_request,
+        tag_suffix=normalized_request.tag_suffix or sanitize_tag_suffix(normalized_request.sst_core_ref),
     )
 
 
-def _run_command(command: list[str], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
+def _source_download_spec_for_local_build(request: LocalBuildRequest) -> SourceDownloadSpec:
+    """Create the source-download plan for a local build request."""
+
+    destination_dir = str(REPO_ROOT / "Containerfiles")
+    if request.container_type == "core":
+        return SourceDownloadSpec(
+            destination_dir=destination_dir,
+            mpich_version=request.mpich_version,
+            sst_version=request.sst_version,
+            download_mpich=True,
+            download_sst_core=True,
+            force_mode=True,
+        )
+    if request.container_type == "full":
+        return SourceDownloadSpec(
+            destination_dir=destination_dir,
+            mpich_version=request.mpich_version,
+            sst_version=request.sst_version,
+            sst_elements_version=request.sst_elements_version,
+            download_mpich=True,
+            download_sst_core=True,
+            download_sst_elements=True,
+            force_mode=True,
+        )
+    if request.container_type in {"dev", "custom", "experiment"}:
+        return SourceDownloadSpec(
+            destination_dir=destination_dir,
+            mpich_version=request.mpich_version,
+            download_mpich=True,
+            force_mode=True,
+        )
+    raise OrchestrationError(f"Unknown container type: {request.container_type}")
+
+
+def _source_download_spec_for_workflow_build(request: WorkflowBuildRequest) -> SourceDownloadSpec:
+    """Create the source-download plan for a reusable workflow build."""
+
+    destination_dir = str(REPO_ROOT / "Containerfiles")
+    if request.container_type == "dev":
+        return SourceDownloadSpec(
+            destination_dir=destination_dir,
+            mpich_version=request.mpich_version,
+            download_mpich=True,
+            force_mode=request.no_cache,
+        )
+
+    if request.container_type in {"core", "full"} and request.sst_version:
+        return SourceDownloadSpec(
+            destination_dir=destination_dir,
+            mpich_version=request.mpich_version,
+            sst_version=request.sst_version,
+            sst_elements_version=request.sst_elements_version,
+            download_mpich=True,
+            download_sst_core=True,
+            download_sst_elements=request.container_type == "full",
+            force_mode=request.no_cache,
+        )
+
+    if request.container_type in {"core", "full", "custom", "experiment"}:
+        return SourceDownloadSpec(
+            destination_dir=destination_dir,
+            mpich_version=request.mpich_version,
+            download_mpich=True,
+            force_mode=request.no_cache,
+        )
+
+    raise OrchestrationError(f"Unknown workflow container type: {request.container_type}")
+
+
+def _workflow_platform_builds(
+    *,
+    repository: str,
+    tag_suffix: str,
+    platforms: tuple[str, ...],
+    containerfile_path: str,
+    docker_context: str,
+    build_target: str,
+    build_args: tuple[str, ...],
+    no_cache: bool,
+) -> tuple[PlatformBuildSpec, ...]:
+    """Create per-platform build specs for a workflow build."""
+
+    platform_builds: list[PlatformBuildSpec] = []
+    for target_platform in platforms:
+        arch = platform_to_arch(target_platform)
+        platform_builds.append(
+            PlatformBuildSpec(
+                platform=target_platform,
+                arch=arch,
+                image_tag=f"{repository}:{tag_suffix}-{arch}",
+                containerfile_path=containerfile_path,
+                docker_context=docker_context,
+                build_target=build_target,
+                build_args=build_args,
+                no_cache=no_cache,
+            )
+        )
+    return tuple(platform_builds)
+
+
+def plan_workflow_build_spec(
+    request: WorkflowBuildRequest,
+    *,
+    validate_base_image: bool = True,
+    container_engine: str | None = None,
+) -> BuildSpec:
+    """Return the shared build spec for a reusable workflow build."""
+
+    normalized_request = normalize_workflow_build_request(request)
+    platforms = normalize_build_platforms(normalized_request.build_platforms)
+    manifest_repository = _workflow_manifest_repository(
+        registry=normalized_request.registry,
+        image_prefix=normalized_request.image_prefix,
+        container_type=normalized_request.container_type,
+        enable_perf_tracking=normalized_request.enable_perf_tracking,
+        experiment_name=normalized_request.experiment_name,
+    )
+    manifest_tag = f"{manifest_repository}:{normalized_request.tag_suffix}"
+    alias_tags = _workflow_alias_tags(normalized_request, manifest_repository)
+    verification = VerificationSpec(
+        mode=normalized_request.validation_mode,
+        max_size_mb=get_default_size_limit(normalized_request.container_type),
+        platforms=platforms,
+        requires_runtime_validation=normalized_request.validation_mode == "full",
+    )
+
+    if normalized_request.container_type == "dev":
+        platform_builds = _workflow_platform_builds(
+            repository=manifest_repository,
+            tag_suffix=normalized_request.tag_suffix,
+            platforms=platforms,
+            containerfile_path="Containerfiles/Containerfile.dev",
+            docker_context="Containerfiles",
+            build_target="",
+            build_args=(
+                f"mpich={normalized_request.mpich_version}",
+                f"NCPUS={normalized_request.build_ncpus}",
+            ),
+            no_cache=normalized_request.no_cache,
+        )
+        return BuildSpec(
+            build_kind="workflow",
+            container_type="dev",
+            registry=normalized_request.registry,
+            tag_suffix=normalized_request.tag_suffix,
+            source=BuildSourceSpec(
+                source_kind="development-dependencies",
+                mpich_version=normalized_request.mpich_version,
+            ),
+            platform_builds=platform_builds,
+            verification=verification,
+            publication=_workflow_publication_spec(manifest_tag, platform_builds, alias_tags),
+            source_download=_source_download_spec_for_workflow_build(normalized_request),
+        )
+
+    if normalized_request.container_type in {"core", "full"} and normalized_request.sst_version:
+        build_args: list[str] = [
+            f"SSTver={normalized_request.sst_version}",
+            f"mpich={normalized_request.mpich_version}",
+            f"NCPUS={normalized_request.build_ncpus}",
+        ]
+        if normalized_request.container_type == "full" and normalized_request.sst_elements_version:
+            build_args.append(f"SST_ELEMENTS_VERSION={normalized_request.sst_elements_version}")
+        if normalized_request.enable_perf_tracking:
+            build_args.append("ENABLE_PERF_TRACKING=1")
+
+        platform_builds = _workflow_platform_builds(
+            repository=manifest_repository,
+            tag_suffix=normalized_request.tag_suffix,
+            platforms=platforms,
+            containerfile_path="Containerfiles/Containerfile",
+            docker_context="Containerfiles",
+            build_target="sst-core" if normalized_request.container_type == "core" else "sst-full",
+            build_args=tuple(build_args),
+            no_cache=normalized_request.no_cache,
+        )
+        return BuildSpec(
+            build_kind="workflow",
+            container_type=normalized_request.container_type,
+            registry=normalized_request.registry,
+            tag_suffix=normalized_request.tag_suffix,
+            source=BuildSourceSpec(
+                source_kind="release-tarballs",
+                mpich_version=normalized_request.mpich_version,
+                sst_version=normalized_request.sst_version,
+                sst_elements_version=normalized_request.sst_elements_version,
+            ),
+            platform_builds=platform_builds,
+            verification=verification,
+            publication=_workflow_publication_spec(manifest_tag, platform_builds, alias_tags),
+            source_download=_source_download_spec_for_workflow_build(normalized_request),
+        )
+
+    if normalized_request.container_type == "experiment":
+        experiment_dir = REPO_ROOT / normalized_request.experiment_name
+        if not experiment_dir.is_dir():
+            raise OrchestrationError(
+                f"Experiment directory '{normalized_request.experiment_name}' not found"
+            )
+
+        has_custom_containerfile = (experiment_dir / "Containerfile").is_file()
+        build_args: list[str] = []
+        resolved_base_image = ""
+        if has_custom_containerfile:
+            containerfile_path = str(experiment_dir / "Containerfile")
+            docker_context = str(experiment_dir)
+            source_kind = "experiment-custom-containerfile"
+        else:
+            repo_owner = normalized_request.image_prefix.split("/", 1)[0]
+            resolved_base_image = resolve_base_image_reference(
+                normalized_request.base_image,
+                repo_owner,
+            )
+            if validate_base_image:
+                engine = container_engine or detect_container_engine()
+                if not inspect_remote_manifest(engine, resolved_base_image):
+                    raise FileNotFoundError(
+                        f"Base image not found: {resolved_base_image}\n"
+                        "For images in this repository, use format: sst-core:latest\n"
+                        "For external images, use full path: ghcr.io/username/image:tag"
+                    )
+            build_args.append(f"BASE_IMAGE={resolved_base_image}")
+            containerfile_path = str(REPO_ROOT / "Containerfiles" / "Containerfile.experiment")
+            docker_context = str(experiment_dir)
+            source_kind = "experiment-template"
+
+        platform_builds = _workflow_platform_builds(
+            repository=manifest_repository,
+            tag_suffix=normalized_request.tag_suffix,
+            platforms=platforms,
+            containerfile_path=containerfile_path,
+            docker_context=docker_context,
+            build_target="",
+            build_args=tuple(build_args),
+            no_cache=normalized_request.no_cache,
+        )
+        return BuildSpec(
+            build_kind="workflow",
+            container_type="experiment",
+            registry=normalized_request.registry,
+            tag_suffix=normalized_request.tag_suffix,
+            source=BuildSourceSpec(
+                source_kind=source_kind,
+                experiment_name=normalized_request.experiment_name,
+                base_image=resolved_base_image or normalized_request.base_image,
+                uses_custom_containerfile=has_custom_containerfile,
+            ),
+            platform_builds=platform_builds,
+            verification=verification,
+            publication=_workflow_publication_spec(manifest_tag, platform_builds, alias_tags),
+            source_download=_source_download_spec_for_workflow_build(normalized_request),
+        )
+
+    build_target = "full-build" if normalized_request.container_type == "full" or normalized_request.sst_elements_repo else "core-build"
+    build_args = [
+        f"mpich={normalized_request.mpich_version}",
+        f"NCPUS={normalized_request.build_ncpus}",
+        "LOCAL_SST_CORE=0",
+        f"SSTrepo={normalized_request.sst_core_repo}",
+        f"tag={normalized_request.sst_core_ref}",
+    ]
+    if build_target == "full-build":
+        build_args.extend(
+            [
+                f"SSTElementsRepo={normalized_request.sst_elements_repo}",
+                f"elementsTag={normalized_request.sst_elements_ref}",
+            ]
+        )
+    if normalized_request.enable_perf_tracking:
+        build_args.append("ENABLE_PERF_TRACKING=1")
+
+    platform_builds = _workflow_platform_builds(
+        repository=manifest_repository,
+        tag_suffix=normalized_request.tag_suffix,
+        platforms=platforms,
+        containerfile_path="Containerfiles/Containerfile.tag",
+        docker_context="Containerfiles",
+        build_target=build_target,
+        build_args=tuple(build_args),
+        no_cache=normalized_request.no_cache,
+    )
+    return BuildSpec(
+        build_kind="workflow",
+        container_type=normalized_request.container_type,
+        registry=normalized_request.registry,
+        tag_suffix=normalized_request.tag_suffix,
+        source=BuildSourceSpec(
+            source_kind="git-ref",
+            mpich_version=normalized_request.mpich_version,
+            sst_core_repo=normalized_request.sst_core_repo,
+            sst_core_ref=normalized_request.sst_core_ref,
+            sst_elements_repo=normalized_request.sst_elements_repo,
+            sst_elements_ref=normalized_request.sst_elements_ref,
+        ),
+        platform_builds=platform_builds,
+        verification=verification,
+        publication=_workflow_publication_spec(manifest_tag, platform_builds, alias_tags),
+        source_download=_source_download_spec_for_workflow_build(normalized_request),
+    )
+
+
+def _container_plan_from_platform_build(build_spec: PlatformBuildSpec) -> _ContainerBuildPlan:
+    """Convert a platform build spec into an executable build command plan."""
+
+    return _ContainerBuildPlan(
+        image_tag=build_spec.image_tag,
+        containerfile=build_spec.containerfile_path,
+        docker_context=build_spec.docker_context,
+        target_platform=build_spec.platform,
+        build_target=build_spec.build_target,
+        build_args=build_spec.build_args,
+        no_cache=build_spec.no_cache,
+    )
+
+
+def _plan_standard_local_build_spec(normalized_request: LocalBuildRequest) -> BuildSpec:
+    """Create the shared build spec for local core, full, and dev builds."""
+
+    if normalized_request.container_type not in {"core", "full", "dev"}:
+        raise ValueError("Standard local build planning requires core, full, or dev")
+
+    arch = platform_to_arch(normalized_request.target_platform)
+    containerfile = REPO_ROOT / "Containerfiles" / (
+        "Containerfile.dev" if normalized_request.container_type == "dev" else "Containerfile"
+    )
+    build_target = ""
+    build_args: list[str] = []
+    source_kind = "development-dependencies"
+    effective_tag_suffix = normalized_request.tag_suffix or "latest"
+
+    if normalized_request.container_type == "core":
+        effective_tag_suffix = (
+            normalized_request.tag_suffix if normalized_request.tag_suffix_set else normalized_request.sst_version
+        )
+        image_tag = generate_container_image_tag(
+            normalized_request.registry,
+            "core",
+            effective_tag_suffix,
+            arch,
+            normalized_request.enable_perf_tracking,
+        )
+        build_target = "sst-core"
+        source_kind = "release-tarballs"
+        build_args.extend(
+            [
+                f"SSTver={normalized_request.sst_version}",
+                f"mpich={normalized_request.mpich_version}",
+                f"NCPUS={normalized_request.build_ncpus}",
+            ]
+        )
+    elif normalized_request.container_type == "full":
+        effective_tag_suffix = (
+            normalized_request.tag_suffix if normalized_request.tag_suffix_set else normalized_request.sst_version
+        )
+        image_tag = generate_container_image_tag(
+            normalized_request.registry,
+            "full",
+            effective_tag_suffix,
+            arch,
+            normalized_request.enable_perf_tracking,
+        )
+        build_target = "sst-full"
+        source_kind = "release-tarballs"
+        build_args.extend(
+            [
+                f"SSTver={normalized_request.sst_version}",
+                f"mpich={normalized_request.mpich_version}",
+                f"NCPUS={normalized_request.build_ncpus}",
+            ]
+        )
+        if normalized_request.sst_elements_version:
+            build_args.append(f"SST_ELEMENTS_VERSION={normalized_request.sst_elements_version}")
+    else:
+        effective_tag_suffix = (
+            normalized_request.tag_suffix if normalized_request.tag_suffix_set else "latest"
+        )
+        image_tag = generate_container_image_tag(
+            normalized_request.registry,
+            "dev",
+            effective_tag_suffix,
+            arch,
+        )
+        build_args.extend(
+            [
+                f"mpich={normalized_request.mpich_version}",
+                f"NCPUS={normalized_request.build_ncpus}",
+            ]
+        )
+
+    if normalized_request.enable_perf_tracking and normalized_request.container_type in {"core", "full"}:
+        build_args.append("ENABLE_PERF_TRACKING=1")
+
+    platform_build = PlatformBuildSpec(
+        platform=normalized_request.target_platform,
+        arch=arch,
+        image_tag=image_tag,
+        containerfile_path=str(containerfile),
+        docker_context=str(REPO_ROOT / "Containerfiles"),
+        build_target=build_target,
+        build_args=tuple(build_args),
+        no_cache=normalized_request.no_cache,
+    )
+    return BuildSpec(
+        build_kind="local",
+        container_type=normalized_request.container_type,
+        registry=normalized_request.registry,
+        tag_suffix=effective_tag_suffix,
+        source=BuildSourceSpec(
+            source_kind=source_kind,
+            mpich_version=normalized_request.mpich_version,
+            sst_version=normalized_request.sst_version,
+            sst_elements_version=normalized_request.sst_elements_version,
+        ),
+        platform_builds=(platform_build,),
+        verification=_verification_spec(
+            normalized_request.container_type,
+            normalized_request.validation_mode,
+            normalized_request.target_platform,
+        ),
+        publication=_local_publication_spec(image_tag),
+        source_download=_source_download_spec_for_local_build(normalized_request),
+    )
+
+
+def _create_container_build_command(
+    container_engine: str,
+    plan: _ContainerBuildPlan,
+) -> list[str]:
+    """Create a container build command from a concrete build plan."""
+
+    command = [
+        container_engine,
+        "build",
+        "--platform",
+        plan.target_platform,
+        "--tag",
+        plan.image_tag,
+        "--file",
+        plan.containerfile,
+    ]
+    if plan.build_target:
+        command.extend(["--target", plan.build_target])
+    for build_arg in plan.build_args:
+        command.extend(["--build-arg", build_arg])
+    if plan.no_cache:
+        command.append("--no-cache")
+    command.append(plan.docker_context)
+    return command
+
+
+def _run_container_build(
+    plan: _ContainerBuildPlan,
+    *,
+    container_engine: str,
+    failure_message: str,
+    cwd: Path | None = None,
+) -> int:
+    """Execute a concrete container build plan and return elapsed build time."""
+
+    log_info(f"Building container: {plan.image_tag}")
+    log_info(f"Using containerfile: {plan.containerfile}")
+    if plan.build_target:
+        log_info(f"Using build target: {plan.build_target}")
+    log_info(f"Using docker context: {plan.docker_context}")
+
+    start_group("Building Container")
+    start_time = time.monotonic()
+    try:
+        build_result = _run_command(
+            _create_container_build_command(container_engine, plan),
+            cwd=cwd,
+        )
+    finally:
+        end_group()
+
+    if build_result.returncode != 0:
+        raise OrchestrationError(failure_message)
+
+    build_time_seconds = int(time.monotonic() - start_time)
+    log_success(f"Build completed: {plan.image_tag}")
+    return build_time_seconds
+
+
+def _remove_image(container_engine: str, image_tag: str, *, warning_message: str) -> bool:
+    """Attempt to remove a built image and report failures consistently."""
+
+    remove_result = _run_command([container_engine, "rmi", image_tag], capture_output=True)
+    if remove_result.returncode != 0:
+        log_warning(warning_message)
+        return False
+    return True
+
+
+def _inspect_built_image_size(container_engine: str, image_tag: str) -> int:
+    """Inspect a built image and report its size in MB."""
+
+    metadata = _inspect_image_json(container_engine, image_tag)
+    image_size_mb = _image_size_mb_from_metadata(metadata)
+    log_info(f"Image size: {image_size_mb}MB")
+    return image_size_mb
+
+
+def _download_file_url(url: str, destination: Path) -> None:
+    """Download a URL to a destination file path."""
+
+    request = urllib.request.Request(url, headers={"User-Agent": "sst-container-factory"})
+    try:
+        with urllib.request.urlopen(
+            request,
+            context=ssl._create_unverified_context(),
+        ) as response:
+            with destination.open("wb") as handle:
+                shutil.copyfileobj(response, handle)
+    except Exception as exc:
+        destination.unlink(missing_ok=True)
+        raise OrchestrationError(f"Failed to download {destination.name}: {exc}") from exc
+
+
+def _download_requested_file(url: str, destination: Path, description: str) -> None:
+    """Download one tarball if it is not already present."""
+
+    log_info("")
+    log_info(f"Downloading {description}...")
+    log_info(f"URL: {url}")
+    log_info(f"File: {destination.name}")
+
+    if destination.is_file():
+        log_info(f"File {destination.name} already exists. Skipping download.")
+        return
+
+    _download_file_url(url, destination)
+    size_mb = destination.stat().st_size // 1024 // 1024
+    log_success(f"Successfully downloaded {destination.name}")
+    log_info(f"File size: {size_mb} MB")
+
+
+def download_tarballs(
+    *,
+    sst_version: str = DEFAULT_SST_VERSION,
+    sst_elements_version: str | None = None,
+    mpich_version: str = DEFAULT_MPICH_VERSION,
+    download_mpich: bool = True,
+    download_sst_core: bool = True,
+    download_sst_elements: bool = True,
+    force_mode: bool = False,
+    destination_dir: Path | None = None,
+) -> DownloadTarballsResult:
+    """Download the requested build source tarballs into a directory."""
+
+    destination = destination_dir or Path.cwd()
+    effective_elements_version = sst_elements_version or sst_version
+
+    if download_sst_core and not force_mode and sst_version not in VALID_SST_VERSIONS:
+        log_warning(f"SST version {sst_version} may not be valid.")
+        log_warning(f"Known valid versions: {' '.join(VALID_SST_VERSIONS)}")
+        log_warning("Continuing anyway... (use --force to suppress this warning)")
+
+    log_info("==================================================")
+    log_info("SST Container Source Download Script")
+    log_info("==================================================")
+    if download_sst_core:
+        log_info(f"SST Version:   {sst_version}")
+    if download_sst_elements:
+        log_info(f"Elements Ver:  {effective_elements_version}")
+    if download_mpich:
+        log_info(f"MPICH Version: {mpich_version}")
+    log_info("==================================================")
+
+    requested_downloads: list[tuple[str, str, str]] = []
+    if download_mpich:
+        requested_downloads.append(
+            (
+                os.environ.get(
+                    "SST_DOWNLOAD_MPICH_URL",
+                    f"https://www.mpich.org/static/downloads/{mpich_version}/mpich-{mpich_version}.tar.gz",
+                ),
+                f"mpich-{mpich_version}.tar.gz",
+                f"MPICH {mpich_version}",
+            )
+        )
+    if download_sst_core:
+        requested_downloads.append(
+            (
+                os.environ.get(
+                    "SST_DOWNLOAD_CORE_URL",
+                    f"https://github.com/sstsimulator/sst-core/releases/download/v{sst_version}_Final/sstcore-{sst_version}.tar.gz",
+                ),
+                f"sstcore-{sst_version}.tar.gz",
+                f"SST-core {sst_version}",
+            )
+        )
+    if download_sst_elements:
+        requested_downloads.append(
+            (
+                os.environ.get(
+                    "SST_DOWNLOAD_ELEMENTS_URL",
+                    f"https://github.com/sstsimulator/sst-elements/releases/download/v{effective_elements_version}_Final/sstelements-{effective_elements_version}.tar.gz",
+                ),
+                f"sstelements-{effective_elements_version}.tar.gz",
+                f"SST-elements {effective_elements_version}",
+            )
+        )
+
+    requested_files: list[str] = []
+    for url, filename, description in requested_downloads:
+        requested_files.append(filename)
+        _download_requested_file(url, destination / filename, description)
+
+    log_info("")
+    log_info("==================================================")
+    log_info("Download Summary")
+    log_info("==================================================")
+
+    total_size_mb = 0
+    missing_files: list[str] = []
+    for filename in requested_files:
+        file_path = destination / filename
+        if file_path.is_file():
+            size_mb = file_path.stat().st_size // 1024 // 1024
+            total_size_mb += size_mb
+            log_success(f"{filename} ({size_mb} MB)")
+        else:
+            missing_files.append(filename)
+            log_error(f"{filename} (MISSING)")
+
+    log_info("==================================================")
+    log_info(f"Total download size: {total_size_mb} MB")
+    if missing_files:
+        raise OrchestrationError(
+            "Some downloads failed. Missing files: " + ", ".join(missing_files)
+        )
+
+    log_success("All requested files downloaded successfully!")
+    return DownloadTarballsResult(
+        requested_files=tuple(requested_files),
+        total_size_mb=total_size_mb,
+        destination_dir=str(destination),
+    )
+
+
+def _run_command(
+    command: list[str],
+    *,
+    capture_output: bool = False,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Run a subprocess command and optionally capture stdout."""
 
     return subprocess.run(
         command,
         capture_output=capture_output,
+        cwd=cwd,
+        env=env,
         text=True,
         check=False,
     )
+
+
+def _last_built_image_path() -> Path:
+    """Return the path to the local-build tag marker file."""
+
+    return REPO_ROOT / ".last_built_image"
+
+
+def _write_last_built_image(image_tag: str) -> None:
+    """Persist the most recently built local image tag."""
+
+    _last_built_image_path().write_text(f"{image_tag}\n", encoding="utf-8")
+
+
+def _read_last_built_image() -> str:
+    """Read the most recently built local image tag, if present."""
+
+    marker_path = _last_built_image_path()
+    if not marker_path.is_file():
+        return ""
+    return marker_path.read_text(encoding="utf-8").strip()
+
+
+def _remove_last_built_image() -> None:
+    """Remove the local-build tag marker file if it exists."""
+
+    marker_path = _last_built_image_path()
+    if marker_path.exists():
+        marker_path.unlink()
+
+
+def _build_delegate_env() -> dict[str, str]:
+    """Create an environment for delegated shell entrypoints."""
+
+    env = os.environ.copy()
+    env["PYTHON_BIN"] = sys.executable
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    return env
+
+
+def _download_local_build_sources(
+    download_spec: SourceDownloadSpec,
+    *,
+    download_script_override: str = "",
+) -> None:
+    """Download the source tarballs required for a local build."""
+
+    log_info("Downloading source files...")
+    if download_script_override:
+        download_script = Path(download_script_override)
+        if not download_script.is_file():
+            raise OrchestrationError(f"Download script not found: {download_script}")
+
+        command = [str(download_script), "--force"]
+        if download_spec.download_sst_core:
+            command.extend(["--sst-version", download_spec.sst_version])
+        if download_spec.download_sst_elements:
+            command.extend(["--sst-elements-version", download_spec.sst_elements_version])
+        if download_spec.download_mpich:
+            command.extend(["--mpich-version", download_spec.mpich_version])
+
+        result = _run_command(command, cwd=Path(download_spec.destination_dir))
+        if result.returncode != 0:
+            raise OrchestrationError("Failed to download required source files")
+    else:
+        download_tarballs(
+            sst_version=download_spec.sst_version or DEFAULT_SST_VERSION,
+            sst_elements_version=download_spec.sst_elements_version or None,
+            mpich_version=download_spec.mpich_version or DEFAULT_MPICH_VERSION,
+            download_mpich=download_spec.download_mpich,
+            download_sst_core=download_spec.download_sst_core,
+            download_sst_elements=download_spec.download_sst_elements,
+            force_mode=download_spec.force_mode,
+            destination_dir=Path(download_spec.destination_dir),
+        )
+
+    log_success("Source files ready")
+
+
+def _build_standard_local_image(build_spec: BuildSpec, *, container_engine: str) -> str:
+    """Build a core, full, or dev image for the local-build entrypoint."""
+
+    _run_container_build(
+        _container_plan_from_platform_build(build_spec.primary_platform_build),
+        container_engine=container_engine,
+        failure_message="Local container build failed",
+    )
+    return build_spec.primary_platform_build.image_tag
+
+
+def _local_custom_build_request(
+    *,
+    registry: str,
+    target_platform: str,
+    mpich_version: str,
+    build_ncpus: str,
+    tag_suffix: str,
+    tag_suffix_set: bool,
+    enable_perf_tracking: bool,
+    no_cache: bool,
+    sst_core_path: str,
+    sst_core_repo: str,
+    sst_core_ref: str,
+    sst_elements_repo: str,
+    sst_elements_ref: str,
+    container_engine: str | None,
+) -> CustomBuildRequest:
+    """Translate a local custom build request into the canonical custom-build request."""
+
+    return CustomBuildRequest(
+        target_platform=target_platform,
+        tag_suffix=tag_suffix if tag_suffix_set else "",
+        sst_core_ref=sst_core_ref,
+        sst_core_repo=sst_core_repo,
+        sst_core_path=sst_core_path,
+        sst_elements_repo=sst_elements_repo,
+        sst_elements_ref=sst_elements_ref,
+        mpich_version=mpich_version,
+        build_ncpus=build_ncpus,
+        registry=registry,
+        enable_perf_tracking=enable_perf_tracking,
+        no_cache=no_cache,
+        cleanup=False,
+        validation_mode="none",
+        container_engine=container_engine,
+    )
+
+
+def _delegate_local_custom_build(
+    *,
+    registry: str,
+    target_platform: str,
+    mpich_version: str,
+    build_ncpus: str,
+    tag_suffix: str,
+    tag_suffix_set: bool,
+    enable_perf_tracking: bool,
+    no_cache: bool,
+    sst_core_path: str,
+    sst_core_repo: str,
+    sst_core_ref: str,
+    sst_elements_repo: str,
+    sst_elements_ref: str,
+    container_engine: str,
+) -> str:
+    """Delegate a local-build custom image build to the canonical custom-build entrypoint."""
+    result = custom_build(
+        _local_custom_build_request(
+            registry=registry,
+            target_platform=target_platform,
+            mpich_version=mpich_version,
+            build_ncpus=build_ncpus,
+            tag_suffix=tag_suffix,
+            tag_suffix_set=tag_suffix_set,
+            enable_perf_tracking=enable_perf_tracking,
+            no_cache=no_cache,
+            sst_core_path=sst_core_path,
+            sst_core_repo=sst_core_repo,
+            sst_core_ref=sst_core_ref,
+            sst_elements_repo=sst_elements_repo,
+            sst_elements_ref=sst_elements_ref,
+            container_engine=container_engine,
+        )
+    )
+    return result.image_tag
+
+
+def _delegate_local_experiment_build(
+    *,
+    registry: str,
+    target_platform: str,
+    tag_suffix: str,
+    base_image: str,
+    experiment_name: str,
+    no_cache: bool,
+    container_engine: str,
+) -> str:
+    """Delegate a local-build experiment image build to the canonical experiment entrypoint."""
+
+    if not experiment_name:
+        raise OrchestrationError("Experiment builds require an experiment name")
+
+    result = experiment_build(
+        ExperimentBuildRequest(
+            experiment_name=experiment_name,
+            base_image=base_image,
+            build_platforms=target_platform,
+            registry=registry,
+            tag_suffix=tag_suffix,
+            validation_mode="none",
+            no_cache=no_cache,
+            container_engine=container_engine,
+        )
+    )
+    return result.image_tag
+
+
+def _plan_custom_build_spec(normalized_request: CustomBuildRequest) -> BuildSpec:
+    """Create the shared build spec for a custom build request."""
+
+    build_type = "full-build" if normalized_request.sst_elements_repo else "core-build"
+    using_local_core_checkout = bool(normalized_request.sst_core_path)
+    arch = platform_to_arch(normalized_request.target_platform)
+    image_tag = generate_custom_image_tag(
+        normalized_request.registry,
+        normalized_request.tag_suffix,
+        arch,
+        normalized_request.enable_perf_tracking,
+    )
+
+    build_args = [
+        f"mpich={normalized_request.mpich_version}",
+        f"NCPUS={normalized_request.build_ncpus}",
+    ]
+    if using_local_core_checkout:
+        build_args.append("LOCAL_SST_CORE=1")
+    else:
+        build_args.extend(
+            [
+                "LOCAL_SST_CORE=0",
+                f"SSTrepo={normalized_request.sst_core_repo}",
+                f"tag={normalized_request.sst_core_ref}",
+            ]
+        )
+
+    if build_type == "full-build":
+        build_args.extend(
+            [
+                f"SSTElementsRepo={normalized_request.sst_elements_repo}",
+                f"elementsTag={normalized_request.sst_elements_ref}",
+            ]
+        )
+
+    if normalized_request.enable_perf_tracking:
+        build_args.append("ENABLE_PERF_TRACKING=1")
+
+    platform_build = PlatformBuildSpec(
+        platform=normalized_request.target_platform,
+        arch=arch,
+        image_tag=image_tag,
+        containerfile_path="Containerfiles/Containerfile.tag",
+        docker_context="Containerfiles",
+        build_target=build_type,
+        build_args=tuple(build_args),
+        no_cache=normalized_request.no_cache,
+    )
+    return BuildSpec(
+        build_kind="custom",
+        container_type="custom",
+        registry=normalized_request.registry,
+        tag_suffix=normalized_request.tag_suffix,
+        source=BuildSourceSpec(
+            source_kind="local-checkout" if using_local_core_checkout else "git-ref",
+            mpich_version=normalized_request.mpich_version,
+            sst_core_repo=normalized_request.sst_core_repo,
+            sst_core_ref=normalized_request.sst_core_ref,
+            sst_core_path=normalized_request.sst_core_path,
+            sst_elements_repo=normalized_request.sst_elements_repo,
+            sst_elements_ref=normalized_request.sst_elements_ref,
+            uses_local_core_checkout=using_local_core_checkout,
+        ),
+        platform_builds=(platform_build,),
+        verification=_verification_spec(
+            "custom",
+            normalized_request.validation_mode,
+            normalized_request.target_platform,
+        ),
+        publication=_local_publication_spec(image_tag),
+    )
+
+
+def plan_custom_build_spec(request: CustomBuildRequest) -> BuildSpec:
+    """Return the shared build spec for a custom build request."""
+
+    return _plan_custom_build_spec(normalize_custom_build_request(request))
+
+
+def _plan_experiment_build_spec(
+    normalized_request: ExperimentBuildRequest,
+    *,
+    container_engine: str | None,
+    validate_base_image: bool,
+) -> BuildSpec:
+    """Create the shared build spec for an experiment build request."""
+
+    experiment_dir = REPO_ROOT / normalized_request.experiment_name
+    if not experiment_dir.is_dir():
+        raise OrchestrationError(
+            f"Experiment directory '{normalized_request.experiment_name}' not found"
+        )
+    has_custom_containerfile = (experiment_dir / "Containerfile").is_file()
+    build_args = list(normalized_request.build_args)
+    resolved_base_image = ""
+
+    if has_custom_containerfile:
+        containerfile_path = experiment_dir / "Containerfile"
+        docker_context = experiment_dir
+        source_kind = "experiment-custom-containerfile"
+    else:
+        containerfile_path = REPO_ROOT / "Containerfiles" / "Containerfile.experiment"
+        docker_context = experiment_dir
+        source_kind = "experiment-template"
+        resolved_base_image = resolve_base_image_reference(
+            normalized_request.base_image,
+            os.environ.get("USER", ""),
+        )
+        build_args.append(f"BASE_IMAGE={resolved_base_image}")
+        if validate_base_image:
+            if container_engine is None:
+                raise ValueError("Container engine is required to validate experiment base images")
+            if not inspect_remote_manifest(container_engine, resolved_base_image):
+                raise FileNotFoundError(
+                    f"Base image not found: {resolved_base_image}\n"
+                    "For images in this repository, use format: sst-core:latest\n"
+                    "For external images, use full path: ghcr.io/username/image:tag"
+                )
+
+    arch = platform_to_arch(normalized_request.build_platforms)
+    image_tag = generate_experiment_image_tag(
+        normalized_request.registry,
+        normalized_request.tag_suffix,
+        arch,
+        normalized_request.experiment_name,
+    )
+    platform_build = PlatformBuildSpec(
+        platform=normalized_request.build_platforms,
+        arch=arch,
+        image_tag=image_tag,
+        containerfile_path=str(containerfile_path),
+        docker_context=str(docker_context),
+        build_args=tuple(build_args),
+        no_cache=normalized_request.no_cache,
+    )
+    return BuildSpec(
+        build_kind="experiment",
+        container_type="experiment",
+        registry=normalized_request.registry,
+        tag_suffix=normalized_request.tag_suffix,
+        source=BuildSourceSpec(
+            source_kind=source_kind,
+            experiment_name=normalized_request.experiment_name,
+            base_image=resolved_base_image or normalized_request.base_image,
+            uses_custom_containerfile=has_custom_containerfile,
+        ),
+        platform_builds=(platform_build,),
+        verification=_verification_spec(
+            "experiment",
+            normalized_request.validation_mode,
+            normalized_request.build_platforms,
+        ),
+        publication=_local_publication_spec(image_tag),
+    )
+
+
+def plan_experiment_build_spec(
+    request: ExperimentBuildRequest,
+    *,
+    container_engine: str | None = None,
+    validate_base_image: bool = True,
+) -> BuildSpec:
+    """Return the shared build spec for an experiment build request."""
+
+    return _plan_experiment_build_spec(
+        normalize_experiment_build_request(request),
+        container_engine=container_engine,
+        validate_base_image=validate_base_image,
+    )
+
+
+def plan_local_build_spec(
+    request: LocalBuildRequest,
+    *,
+    container_engine: str | None = None,
+) -> BuildSpec:
+    """Return the shared build spec for a local build request."""
+
+    normalized_request = normalize_local_build_request(request)
+    if normalized_request.container_type in {"core", "full", "dev"}:
+        return _plan_standard_local_build_spec(normalized_request)
+    if normalized_request.container_type == "custom":
+        custom_spec = _plan_custom_build_spec(
+            normalize_custom_build_request(
+                _local_custom_build_request(
+                    registry=normalized_request.registry,
+                    target_platform=normalized_request.target_platform,
+                    mpich_version=normalized_request.mpich_version,
+                    build_ncpus=normalized_request.build_ncpus,
+                    tag_suffix=normalized_request.tag_suffix,
+                    tag_suffix_set=normalized_request.tag_suffix_set,
+                    enable_perf_tracking=normalized_request.enable_perf_tracking,
+                    no_cache=normalized_request.no_cache,
+                    sst_core_path=normalized_request.sst_core_path,
+                    sst_core_repo=normalized_request.sst_core_repo,
+                    sst_core_ref=normalized_request.sst_core_ref,
+                    sst_elements_repo=normalized_request.sst_elements_repo,
+                    sst_elements_ref=normalized_request.sst_elements_ref,
+                    container_engine=normalized_request.container_engine,
+                )
+            )
+        )
+        return replace(
+            custom_spec,
+            build_kind="local",
+            source_download=_source_download_spec_for_local_build(normalized_request),
+            verification=_verification_spec(
+                "custom",
+                normalized_request.validation_mode,
+                normalized_request.target_platform,
+            ),
+        )
+    if normalized_request.container_type == "experiment":
+        experiment_spec = _plan_experiment_build_spec(
+            normalize_experiment_build_request(
+                ExperimentBuildRequest(
+                    experiment_name=normalized_request.experiment_name,
+                    base_image=normalized_request.base_image,
+                    build_platforms=normalized_request.target_platform,
+                    registry=normalized_request.registry,
+                    tag_suffix=normalized_request.tag_suffix,
+                    validation_mode=normalized_request.validation_mode,
+                    no_cache=normalized_request.no_cache,
+                    container_engine=normalized_request.container_engine,
+                )
+            ),
+            container_engine=container_engine,
+            validate_base_image=False,
+        )
+        return replace(
+            experiment_spec,
+            build_kind="local",
+            source_download=_source_download_spec_for_local_build(normalized_request),
+            verification=_verification_spec(
+                "experiment",
+                normalized_request.validation_mode,
+                normalized_request.target_platform,
+            ),
+        )
+    raise OrchestrationError(f"Unknown container type: {normalized_request.container_type}")
+
+
+def _validate_local_build_image(
+    *,
+    build_spec: BuildSpec,
+    container_engine: str,
+    image_tag: str,
+    target_platform: str,
+) -> int | None:
+    """Validate an image produced by the local-build entrypoint."""
+
+    log_info(f"Validating container: {image_tag}")
+    return _run_image_validation(
+        build_spec.verification.mode,
+        container_engine=container_engine,
+        image_tag=image_tag,
+        target_platform=target_platform,
+        max_size_mb=build_spec.verification.max_size_mb,
+        skip_message="Skipping validation (validation mode: none)",
+        quick_success_message="Quick container validation passed",
+        metadata_success_message="Metadata-only container validation passed",
+        full_success_message="Container validation passed",
+        return_image_size=True,
+    )
+
+
+def _cleanup_local_build(container_engine: str, image_tag: str) -> None:
+    """Remove the built image, marker file, and builder cache for local-build."""
+
+    log_info("Cleaning up...")
+    log_info(f"Removing image: {image_tag}")
+    _remove_image(
+        container_engine,
+        image_tag,
+        warning_message="Failed to remove image",
+    )
+    _remove_last_built_image()
+
+    prune_result = _run_command([container_engine, "builder", "prune", "-f"])
+    if prune_result.returncode != 0:
+        log_warning("Failed to prune build cache")
+
+    log_success("Cleanup completed")
+
+
+def local_build(request: LocalBuildRequest) -> LocalBuildResult:
+    """Execute the local-build path from explicit arguments."""
+
+    normalized_request = normalize_local_build_request(request)
+    container_engine = detect_container_engine(normalized_request.container_engine)
+    build_spec = plan_local_build_spec(
+        normalized_request,
+        container_engine=container_engine,
+    )
+    sst_elements_version = normalized_request.sst_elements_version or normalized_request.sst_version
+
+    log_info("=== Local Container Build ===")
+    log_info(f"Container Type: {normalized_request.container_type}")
+    log_info(f"Platform: {normalized_request.target_platform}")
+    log_info(f"Container Engine: {container_engine}")
+    log_info(f"Registry: {normalized_request.registry}")
+    log_info(f"SST Version: {normalized_request.sst_version}")
+    if sst_elements_version:
+        log_info(f"SST Elements Version: {sst_elements_version}")
+    log_info(f"MPICH Version: {normalized_request.mpich_version}")
+    log_info("Starting local build sequence...")
+
+    image_tag = ""
+    image_size_mb: int | None = None
+    try:
+        if not normalized_request.validate_only:
+            if not (REPO_ROOT / "Containerfiles").is_dir():
+                raise OrchestrationError(
+                    "Containerfiles directory not found. Please run from project root."
+                )
+
+            if build_spec.source_download is None:
+                raise OrchestrationError("Local build spec did not include a download plan")
+
+            _download_local_build_sources(
+                build_spec.source_download,
+                download_script_override=normalized_request.download_script,
+            )
+
+            if normalized_request.container_type in {"core", "full", "dev"}:
+                image_tag = _build_standard_local_image(
+                    build_spec,
+                    container_engine=container_engine,
+                )
+            elif normalized_request.container_type == "custom":
+                image_tag = _delegate_local_custom_build(
+                    registry=normalized_request.registry,
+                    target_platform=normalized_request.target_platform,
+                    mpich_version=normalized_request.mpich_version,
+                    build_ncpus=normalized_request.build_ncpus,
+                    tag_suffix=normalized_request.tag_suffix,
+                    tag_suffix_set=normalized_request.tag_suffix_set,
+                    enable_perf_tracking=normalized_request.enable_perf_tracking,
+                    no_cache=normalized_request.no_cache,
+                    sst_core_path=normalized_request.sst_core_path,
+                    sst_core_repo=normalized_request.sst_core_repo,
+                    sst_core_ref=normalized_request.sst_core_ref,
+                    sst_elements_repo=normalized_request.sst_elements_repo,
+                    sst_elements_ref=normalized_request.sst_elements_ref,
+                    container_engine=container_engine,
+                )
+            elif normalized_request.container_type == "experiment":
+                image_tag = _delegate_local_experiment_build(
+                    registry=normalized_request.registry,
+                    target_platform=normalized_request.target_platform,
+                    tag_suffix=normalized_request.tag_suffix,
+                    base_image=normalized_request.base_image,
+                    experiment_name=normalized_request.experiment_name,
+                    no_cache=normalized_request.no_cache,
+                    container_engine=container_engine,
+                )
+            else:
+                raise OrchestrationError(f"Unknown container type: {normalized_request.container_type}")
+
+            _write_last_built_image(image_tag)
+        else:
+            image_tag = _read_last_built_image()
+            if not image_tag:
+                raise OrchestrationError("No image tag specified for validation")
+
+        image_size_mb = _validate_local_build_image(
+            build_spec=build_spec,
+            container_engine=container_engine,
+            image_tag=image_tag,
+            target_platform=normalized_request.target_platform,
+        )
+
+        if normalized_request.cleanup:
+            _cleanup_local_build(container_engine, image_tag)
+        else:
+            log_info("Image preserved. Use --cleanup to remove after the build.")
+            log_info(f"Built image: {image_tag}")
+
+        log_success("Build sequence completed successfully!")
+        return LocalBuildResult(
+            image_tag=image_tag,
+            container_type=normalized_request.container_type,
+            image_size_mb=image_size_mb,
+        )
+    except Exception:
+        _remove_last_built_image()
+        raise
+
+
+def local_build_from_env() -> LocalBuildResult:
+    """Execute the local-build path from normalized environment variables."""
+
+    sst_version = os.environ.get("SST_VERSION", DEFAULT_SST_VERSION)
+    request = LocalBuildRequest(
+        container_type=os.environ.get("CONTAINER_TYPE", ""),
+        validate_only=os.environ.get("VALIDATE_ONLY", "false") == "true",
+        validation_mode=os.environ.get("VALIDATION_MODE", "full"),
+        cleanup=os.environ.get("CLEANUP", "false") == "true",
+        registry=os.environ.get("REGISTRY", DEFAULT_REGISTRY),
+        sst_version=sst_version,
+        sst_elements_version=os.environ.get("SST_ELEMENTS_VERSION", sst_version),
+        mpich_version=os.environ.get("MPICH_VERSION", DEFAULT_MPICH_VERSION),
+        build_ncpus=os.environ.get("BUILD_NCPUS", DEFAULT_BUILD_NCPUS),
+        target_platform=os.environ.get("TARGET_PLATFORM", ""),
+        enable_perf_tracking=os.environ.get("ENABLE_PERF_TRACKING", "false") == "true",
+        tag_suffix=os.environ.get("TAG_SUFFIX", ""),
+        tag_suffix_set=os.environ.get("TAG_SUFFIX_SET", "false") == "true",
+        no_cache=os.environ.get("NO_CACHE", "false") == "true",
+        experiment_name=os.environ.get("EXPERIMENT_NAME", ""),
+        base_image=os.environ.get("BASE_IMAGE", ""),
+        sst_core_path=os.environ.get("SST_CORE_PATH", ""),
+        sst_core_repo=os.environ.get("SST_CORE_REPO", DEFAULT_SST_CORE_REPO),
+        sst_core_ref=os.environ.get("SST_CORE_REF", ""),
+        sst_elements_repo=os.environ.get("SST_ELEMENTS_REPO", ""),
+        sst_elements_ref=os.environ.get("SST_ELEMENTS_REF", ""),
+        container_engine=os.environ.get("CONTAINER_ENGINE"),
+        download_script=os.environ.get("DOWNLOAD_SCRIPT", ""),
+    )
+    return local_build(request)
 
 
 def _inspect_image_json(engine: str, image_tag: str) -> dict:
@@ -342,12 +2144,18 @@ def _inspect_image_json(engine: str, image_tag: str) -> dict:
     return payload[0]
 
 
+def _image_size_mb_from_metadata(metadata: dict) -> int:
+    """Extract image size in MB from container metadata."""
+
+    return int(metadata.get("Size", 0)) // 1024 // 1024
+
+
 def quick_validate_image(engine: str, image_tag: str) -> None:
     """Perform lightweight validation without creating a container."""
 
     log_info(f"Quick validation of {image_tag}")
     metadata = _inspect_image_json(engine, image_tag)
-    image_size_mb = int(metadata.get("Size", 0)) // 1024 // 1024
+    image_size_mb = _image_size_mb_from_metadata(metadata)
     log_success("Image exists")
     log_info(f"Image size: {image_size_mb}MB")
     if not metadata.get("Config"):
@@ -361,7 +2169,7 @@ def metadata_validate_image(engine: str, image_tag: str, max_size_mb: int) -> No
 
     log_info(f"No-exec validation of {image_tag}")
     metadata = _inspect_image_json(engine, image_tag)
-    image_size_mb = int(metadata.get("Size", 0)) // 1024 // 1024
+    image_size_mb = _image_size_mb_from_metadata(metadata)
 
     log_success("Image exists")
     log_info(f"Image size: {image_size_mb}MB")
@@ -459,7 +2267,9 @@ def _validate_container(
 def _detect_experiment_containerfile_type(
     experiment_name: str,
     base_image: str,
-    container_engine: str,
+    container_engine: str | None,
+    *,
+    validate_base_image: bool = True,
 ) -> str:
     """Determine whether an experiment uses a custom or template Containerfile."""
 
@@ -477,132 +2287,222 @@ def _detect_experiment_containerfile_type(
     if base_image:
         resolved_image = resolve_base_image_reference(base_image, os.environ.get("USER", ""))
         log_info(f"Resolved base image: {resolved_image}")
-        if not inspect_remote_manifest(container_engine, resolved_image):
-            raise OrchestrationError(
-                f"Base image not found: {resolved_image}\n"
-                "For images in this repository, use format: sst-core:latest\n"
-                "For external images, use full path: ghcr.io/username/image:tag"
-            )
-        log_info("Base image is accessible")
+        if validate_base_image:
+            if container_engine is None:
+                raise ValueError("Container engine is required to validate experiment base images")
+            if not inspect_remote_manifest(container_engine, resolved_image):
+                raise OrchestrationError(
+                    f"Base image not found: {resolved_image}\n"
+                    "For images in this repository, use format: sst-core:latest\n"
+                    "For external images, use full path: ghcr.io/username/image:tag"
+                )
+            log_info("Base image is accessible")
+        else:
+            log_info("Skipping remote base-image verification during planning")
 
     return "template"
 
 
-def experiment_build_from_env() -> ExperimentBuildResult:
-    """Execute the experiment build path from normalized environment variables."""
+def experiment_build(request: ExperimentBuildRequest) -> ExperimentBuildResult:
+    """Execute the experiment build path from explicit arguments."""
 
-    experiment_name = os.environ.get("EXPERIMENT_NAME", "")
-    base_image = os.environ.get("BASE_IMAGE", "")
-    build_platforms = os.environ.get("BUILD_PLATFORMS", "")
-    registry = os.environ.get("REGISTRY", "localhost:5000")
-    tag_suffix = os.environ.get("TAG_SUFFIX", "latest")
-    validation_mode = os.environ.get("VALIDATION_MODE", "full")
-    no_cache = os.environ.get("NO_CACHE", "false") == "true"
-    container_engine = detect_container_engine(os.environ.get("CONTAINER_ENGINE"))
-    build_args = [line for line in os.environ.get("BUILD_ARGS_SERIALIZED", "").splitlines() if line]
+    normalized_request = normalize_experiment_build_request(request)
 
-    if not experiment_name:
-        raise OrchestrationError("Experiment name is required")
-    if not build_platforms:
-        raise OrchestrationError("BUILD_PLATFORMS is required")
+    container_engine = detect_container_engine(normalized_request.container_engine)
+    build_spec = _plan_experiment_build_spec(
+        normalized_request,
+        container_engine=container_engine,
+        validate_base_image=True,
+    )
+    platform_build = build_spec.primary_platform_build
 
     log_info("Starting experiment container build...")
-    containerfile_type = _detect_experiment_containerfile_type(
-        experiment_name,
-        base_image,
-        container_engine,
-    )
-
-    experiment_dir = REPO_ROOT / experiment_name
-    if containerfile_type == "custom":
-        containerfile_path = experiment_dir / "Containerfile"
-        docker_context = experiment_dir
-    else:
-        containerfile_path = REPO_ROOT / "Containerfiles" / "Containerfile.experiment"
-        docker_context = experiment_dir
-        if base_image:
-            resolved_base_image = resolve_base_image_reference(base_image, os.environ.get("USER", ""))
-            build_args = [*build_args, f"BASE_IMAGE={resolved_base_image}"]
-
-    arch = platform_to_arch(build_platforms)
-    tag_name = generate_experiment_image_tag(registry, tag_suffix, arch, experiment_name)
-
     log_info("Configuration:")
-    log_info(f"  Experiment: {experiment_name}")
+    log_info(f"  Experiment: {normalized_request.experiment_name}")
     log_info("  Container type: experiment")
-    log_info(f"  Containerfile type: {containerfile_type}")
-    log_info(f"  Containerfile path: {containerfile_path}")
-    log_info(f"  Docker context: {docker_context}")
-    log_info(f"  Tag: {tag_name}")
-    log_info(f"  Platforms: {build_platforms}")
-    log_info(f"  Validation: {validation_mode}")
-    if build_args:
+    log_info(
+        f"  Containerfile type: {'custom' if build_spec.source.uses_custom_containerfile else 'template'}"
+    )
+    log_info(f"  Containerfile path: {platform_build.containerfile_path}")
+    log_info(f"  Docker context: {platform_build.docker_context}")
+    log_info(f"  Tag: {platform_build.image_tag}")
+    log_info(f"  Platforms: {platform_build.platform}")
+    log_info(f"  Validation: {build_spec.verification.mode}")
+    if platform_build.build_args:
         log_info("  Build args:")
-        for build_arg in build_args:
+        for build_arg in platform_build.build_args:
             log_info(f"    {build_arg}")
 
-    build_command = [
-        container_engine,
-        "build",
-        "--platform",
-        build_platforms,
-        "-f",
-        str(containerfile_path),
-        "-t",
-        tag_name,
-    ]
-    if no_cache:
-        build_command.append("--no-cache")
-    for build_arg in build_args:
-        build_command.extend(["--build-arg", build_arg])
-    build_command.append(str(docker_context))
-
     start_group("Container Build")
-    build_result = _run_command(build_command)
+    build_result = _run_command(
+        _create_container_build_command(
+            container_engine,
+            _container_plan_from_platform_build(platform_build),
+        )
+    )
     end_group()
     if build_result.returncode != 0:
         raise OrchestrationError("Experiment container build failed")
 
-    log_info(f"Container built successfully: {tag_name}")
+    log_info(f"Container built successfully: {platform_build.image_tag}")
 
-    max_size_mb = 8192
-    if validation_mode == "none":
-        log_info("Skipping validation (validation mode: none)")
-    elif validation_mode == "quick":
-        log_info("Running container validation...")
-        quick_validate_image(container_engine, tag_name)
-        log_success("Quick container validation passed")
-    elif validation_mode == "metadata":
-        log_info("Running container validation...")
-        metadata_validate_image(container_engine, tag_name, max_size_mb)
-        log_success("Metadata-only container validation passed")
-    elif validation_mode == "full":
-        log_info("Running container validation...")
-        _validate_container(container_engine, tag_name, build_platforms, max_size_mb)
-        log_success("Full container validation passed")
-    else:
-        raise OrchestrationError(f"Unsupported validation mode: {validation_mode}")
+    _run_image_validation(
+        build_spec.verification.mode,
+        container_engine=container_engine,
+        image_tag=platform_build.image_tag,
+        target_platform=platform_build.platform,
+        max_size_mb=build_spec.verification.max_size_mb,
+        pre_message="Running container validation...",
+        skip_message="Skipping validation (validation mode: none)",
+        quick_success_message="Quick container validation passed",
+        metadata_success_message="Metadata-only container validation passed",
+        full_success_message="Full container validation passed",
+    )
 
     log_info("Experiment build completed successfully!")
     return ExperimentBuildResult(
-        image_tag=tag_name,
-        containerfile_type=containerfile_type,
-        containerfile_path=str(containerfile_path),
-        docker_context=str(docker_context),
+        image_tag=platform_build.image_tag,
+        containerfile_type="custom" if build_spec.source.uses_custom_containerfile else "template",
+        containerfile_path=platform_build.containerfile_path,
+        docker_context=platform_build.docker_context,
     )
 
 
-def validate_container_from_env() -> ValidateContainerResult:
-    """Validate a pulled container image using environment variables."""
+def custom_build(request: CustomBuildRequest) -> CustomBuildResult:
+    """Execute the custom build path from explicit arguments."""
 
-    image_tag = os.environ.get("IMAGE_TAG", "")
-    target_platform = os.environ.get("PLATFORM", "")
-    max_size_mb = int(os.environ.get("MAX_SIZE_MB", "2048"))
-    container_engine = detect_container_engine(os.environ.get("CONTAINER_ENGINE"))
+    normalized_request = normalize_custom_build_request(request)
+    build_spec = _plan_custom_build_spec(normalized_request)
+    platform_build = build_spec.primary_platform_build
+    build_type = platform_build.build_target
+    using_local_core_checkout = build_spec.source.uses_local_core_checkout
+    container_engine = detect_container_engine(normalized_request.container_engine)
 
-    if not image_tag:
-        raise OrchestrationError("IMAGE_TAG is required")
-    if not target_platform:
-        raise OrchestrationError("PLATFORM is required")
+    start_group("Custom SST Container Build")
+    log_info("Build Configuration:")
+    if using_local_core_checkout:
+        log_info(f"  SST Core Checkout: {normalized_request.sst_core_path}")
+    else:
+        log_info(f"  SST Core Repository: {normalized_request.sst_core_repo}")
+        log_info(f"  SST Core Reference: {normalized_request.sst_core_ref}")
+    if normalized_request.sst_elements_repo:
+        log_info(f"  SST Elements Repository: {normalized_request.sst_elements_repo}")
+        log_info(f"  SST Elements Reference: {normalized_request.sst_elements_ref}")
+    log_info(f"  MPICH Version: {normalized_request.mpich_version}")
+    log_info(f"  Performance Tracking: {str(normalized_request.enable_perf_tracking).lower()}")
+    log_info(f"  Build Type: {build_type}")
+    log_info(f"  Target Platform: {normalized_request.target_platform}")
+    log_info(f"  Container Engine: {container_engine}")
+    log_info(f"  Image Tag: {platform_build.image_tag}")
+    end_group()
 
-    return _validate_container(container_engine, image_tag, target_platform, max_size_mb)
+    staged_local_source = False
+    if using_local_core_checkout:
+        stage_local_sst_core_checkout(normalized_request.sst_core_path)
+        staged_local_source = True
+
+    try:
+        build_time_seconds = _run_container_build(
+            _container_plan_from_platform_build(platform_build),
+            container_engine=container_engine,
+            failure_message="Container build failed",
+            cwd=REPO_ROOT,
+        )
+        log_success(f"Container build completed in {build_time_seconds}s")
+
+        image_size_mb = _inspect_built_image_size(container_engine, platform_build.image_tag)
+
+        _run_image_validation(
+            build_spec.verification.mode,
+            container_engine=container_engine,
+            image_tag=platform_build.image_tag,
+            target_platform=normalized_request.target_platform,
+            max_size_mb=build_spec.verification.max_size_mb,
+            group_name="Validating Container",
+            quick_success_message="Quick container validation passed",
+            metadata_success_message="Metadata-only container validation passed",
+            full_success_message="Container validation passed",
+        )
+
+        if normalized_request.cleanup:
+            log_info(f"Cleaning up image: {platform_build.image_tag}")
+            if _remove_image(
+                container_engine,
+                platform_build.image_tag,
+                warning_message="Failed to clean up image",
+            ):
+                log_success("Image cleaned up successfully")
+
+        log_success("Custom build completed successfully")
+        log_info(f"Image: {platform_build.image_tag}")
+
+        if normalized_request.github_actions_mode or os.environ.get("GITHUB_ACTIONS") == "true":
+            set_output("image-tag", platform_build.image_tag)
+            set_output("build-time", str(build_time_seconds))
+            set_output("image-size-mb", str(image_size_mb))
+            set_output("platform", normalized_request.target_platform)
+            set_output("build-successful", "true")
+
+        return CustomBuildResult(
+            image_tag=platform_build.image_tag,
+            build_type=build_type,
+            image_size_mb=image_size_mb,
+        )
+    finally:
+        if staged_local_source:
+            reset_local_source_stage_dir()
+
+
+def _run_image_validation(
+    validation_mode: str,
+    *,
+    container_engine: str,
+    image_tag: str,
+    target_platform: str,
+    max_size_mb: int,
+    pre_message: str | None = None,
+    skip_message: str | None = None,
+    group_name: str | None = None,
+    quick_success_message: str = "Quick container validation passed",
+    metadata_success_message: str = "Metadata-only container validation passed",
+    full_success_message: str = "Container validation passed",
+    return_image_size: bool = False,
+) -> int | None:
+    """Run one of the supported validation modes and optionally return image size."""
+
+    if validation_mode == "none":
+        if skip_message:
+            log_info(skip_message)
+        return None
+
+    if pre_message:
+        log_info(pre_message)
+
+    if group_name:
+        start_group(group_name)
+
+    try:
+        if validation_mode == "quick":
+            quick_validate_image(container_engine, image_tag)
+            log_success(quick_success_message)
+            return None
+
+        if validation_mode == "metadata":
+            metadata_validate_image(container_engine, image_tag, max_size_mb)
+            log_success(metadata_success_message)
+            if return_image_size:
+                metadata = _inspect_image_json(container_engine, image_tag)
+                return _image_size_mb_from_metadata(metadata)
+            return None
+
+        if validation_mode == "full":
+            result = _validate_container(container_engine, image_tag, target_platform, max_size_mb)
+            log_success(full_success_message)
+            if return_image_size:
+                return result.image_size_mb
+            return None
+
+        raise OrchestrationError(f"Unsupported validation mode: {validation_mode}")
+    finally:
+        if group_name:
+            end_group()

@@ -75,11 +75,9 @@ jobs:
       build_platforms: '${{ inputs.build_platforms }}'
       sst_version: '${{ inputs.sst_version }}'
       mpich_version: '${{ inputs.mpich_version }}'
-      containerfile_path: 'Containerfiles/Containerfile'
-      docker_context: 'Containerfiles'
-      build_target: 'sst-core'
       force_rebuild: ${{ inputs.force_rebuild }}
       ignore_cache: ${{ inputs.ignore_cache }}
+      tag_as_latest: ${{ inputs.tag_as_latest }}
       enable_perf_tracking: ${{ inputs.enable_perf_tracking }}
     secrets: inherit
 
@@ -97,11 +95,9 @@ jobs:
       sst_version: '${{ inputs.sst_version }}'
       sst_elements_version: '${{ inputs.sst_elements_version }}'
       mpich_version: '${{ inputs.mpich_version }}'
-      containerfile_path: 'Containerfiles/Containerfile'
-      docker_context: 'Containerfiles'
-      build_target: 'sst-full'
       force_rebuild: ${{ inputs.force_rebuild }}
       ignore_cache: ${{ inputs.ignore_cache }}
+      tag_as_latest: ${{ inputs.tag_as_latest }}
       enable_perf_tracking: ${{ inputs.enable_perf_tracking }}
     secrets: inherit
 
@@ -116,7 +112,8 @@ jobs:
       container_type: 'core'
       image_tags: '${{ needs.build-core-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      max_image_size_mb: 2048  # 2GB - enough for core
+      max_image_size_mb: ${{ fromJson(needs.build-core-containers.outputs.max_image_size_mb) }}
+      validation_mode: '${{ needs.build-core-containers.outputs.validation_mode }}'
     secrets: inherit
 
   validate-full-containers:
@@ -130,7 +127,8 @@ jobs:
       container_type: 'full'
       image_tags: '${{ needs.build-full-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      max_image_size_mb: 4096  # 4GB - full build is larger
+      max_image_size_mb: ${{ fromJson(needs.build-full-containers.outputs.max_image_size_mb) }}
+      validation_mode: '${{ needs.build-full-containers.outputs.validation_mode }}'
     secrets: inherit
 
   generate-summary:
@@ -146,95 +144,7 @@ jobs:
       manifest_tag: '${{ needs.build-core-containers.outputs.manifest_tag || needs.build-full-containers.outputs.manifest_tag }}'
       built_images: '${{ needs.build-core-containers.outputs.built_images || needs.build-full-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      tag_suffix: '${{ inputs.sst_version }}'
+      tag_suffix: '${{ needs.build-core-containers.outputs.resolved_tag_suffix || needs.build-full-containers.outputs.resolved_tag_suffix }}'
+      alias_tags_json: '${{ needs.build-core-containers.outputs.alias_tags_json || needs.build-full-containers.outputs.alias_tags_json }}'
       sst_version: '${{ inputs.sst_version }}'
       mpich_version: '${{ inputs.mpich_version }}'
-
-  # Optional: Tag as latest if requested
-  tag-as-latest:
-    runs-on: ubuntu-latest
-    needs: [build-core-containers, build-full-containers]
-    if: always() && inputs.tag_as_latest && (
-        (contains(inputs.container_types, 'core') && needs.build-core-containers.result == 'success') ||
-        (contains(inputs.container_types, 'full') && needs.build-full-containers.result == 'success')
-      )
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Tag containers as latest
-        run: |
-          # Source the configuration library for tagging functions
-          source scripts/lib/config.sh
-
-          echo "Tagging containers as 'latest'"
-
-          # Function to process built images from a job and create latest tags
-          process_job_images() {
-            local job_name="$1"
-            local job_result="$2"
-            local built_images="$3"
-
-            if [[ "$job_result" != "success" ]]; then
-              echo "Skipping $job_name (result: $job_result)"
-              return
-            fi
-
-            echo "Processing $job_name for latest tagging..."
-
-            # Generate tagging information using library function
-            local tagging_info
-            tagging_info=$(generate_latest_tagging_info "$built_images")
-
-            if [[ "$(echo "$tagging_info" | jq 'length')" -eq 0 ]]; then
-              echo "Warning: No tagging information generated for $job_name"
-              return
-            fi
-
-            # Process each base image for latest tagging
-            echo "$tagging_info" | jq -c '.[]' | while read -r entry; do
-              local base_name latest_tag
-              base_name=$(echo "$entry" | jq -r '.base_name')
-              latest_tag=$(echo "$entry" | jq -r '.latest_tag')
-
-              echo "  Creating latest tag: $latest_tag"
-              echo "  Base name: $base_name"
-
-              # Get platform images for this base
-              local platform_images=()
-              while IFS= read -r img; do
-                if [[ -n "$img" ]]; then
-                  platform_images+=("$img")
-                  echo "    Platform image: $img"
-                fi
-              done < <(echo "$entry" | jq -r '.platform_images[]')
-
-              if [[ ${#platform_images[@]} -gt 0 ]]; then
-                # Create the latest tag from all platform images
-                echo "  Executing: docker buildx imagetools create --tag '$latest_tag' ${platform_images[*]}"
-                docker buildx imagetools create --tag "$latest_tag" "${platform_images[@]}"
-                echo "  [SUCCESS] Created: $latest_tag"
-              else
-                echo "  Warning: No platform images found for $base_name"
-              fi
-            done
-          }
-
-          # Process all build jobs that completed successfully
-          process_job_images "build-core-containers" "${{ needs.build-core-containers.result }}" '${{ needs.build-core-containers.outputs.built_images }}'
-          process_job_images "build-full-containers" "${{ needs.build-full-containers.result }}" '${{ needs.build-full-containers.outputs.built_images }}'
-
-          echo "Latest tagging completed!"
