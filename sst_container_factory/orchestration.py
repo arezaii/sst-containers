@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import os
 import platform
@@ -23,6 +24,8 @@ from .build_spec import (
     PublicationSpec,
     SourceDownloadSpec,
     VerificationSpec,
+    WorkflowBakePlan,
+    WorkflowBakeTargetSpec,
 )
 from .github_actions import end_group, set_output, start_group
 from .logging_utils import log_error, log_info, log_success, log_warning
@@ -950,6 +953,95 @@ def _workflow_platform_builds(
     return tuple(platform_builds)
 
 
+def _workflow_bake_path(path: str) -> str:
+    """Normalize workflow build paths for emission in Buildx bake files."""
+
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return path
+
+    try:
+        return str(candidate.relative_to(REPO_ROOT)) or "."
+    except ValueError:
+        return path
+
+
+def _key_value_mapping(entries: tuple[str, ...]) -> dict[str, str]:
+    """Convert KEY=VALUE tuples into a mapping for Buildx bake emission."""
+
+    mapped_entries: dict[str, str] = {}
+    for entry in entries:
+        key, separator, value = entry.partition("=")
+        if not separator:
+            raise ValueError(f"Expected KEY=VALUE entry, got: {entry}")
+        mapped_entries[key] = value
+    return mapped_entries
+
+
+def _workflow_bake_target_name(build_spec: BuildSpec, platform_build: PlatformBuildSpec) -> str:
+    """Return a stable Buildx bake target name for one platform build."""
+
+    return f"{build_spec.container_type}-{platform_build.arch}"
+
+
+def plan_workflow_bake(
+    build_spec: BuildSpec,
+    *,
+    labels: Mapping[str, str] | None = None,
+) -> WorkflowBakePlan:
+    """Convert a workflow build spec into a Buildx bake definition."""
+
+    if build_spec.build_kind != "workflow":
+        raise ValueError("Buildx bake emission is only supported for workflow build specs")
+
+    merged_labels = dict(labels or {})
+    target_definitions: dict[str, object] = {}
+    bake_targets: list[WorkflowBakeTargetSpec] = []
+
+    for platform_build in build_spec.platform_builds:
+        target_name = _workflow_bake_target_name(build_spec, platform_build)
+        cache_scope = f"{build_spec.container_type}-{build_spec.tag_suffix}-{platform_build.arch}"
+        target_definition: dict[str, object] = {
+            "context": _workflow_bake_path(platform_build.docker_context),
+            "dockerfile": _workflow_bake_path(platform_build.containerfile_path),
+            "platforms": [platform_build.platform],
+            "tags": [platform_build.image_tag],
+            "cache-from": [f"type=gha,scope={cache_scope}"],
+            "cache-to": [f"type=gha,mode=max,scope={cache_scope}"],
+        }
+        if platform_build.build_target:
+            target_definition["target"] = platform_build.build_target
+        if platform_build.build_args:
+            target_definition["args"] = _key_value_mapping(platform_build.build_args)
+        if platform_build.labels or merged_labels:
+            labels_map: dict[str, str] = {}
+            if platform_build.labels:
+                labels_map.update(_key_value_mapping(platform_build.labels))
+            labels_map.update(merged_labels)
+            target_definition["labels"] = labels_map
+        if platform_build.no_cache:
+            target_definition["no-cache"] = True
+
+        target_definitions[target_name] = target_definition
+        bake_targets.append(
+            WorkflowBakeTargetSpec(
+                name=target_name,
+                platform=platform_build.platform,
+                arch=platform_build.arch,
+                image_tag=platform_build.image_tag,
+                cache_scope=cache_scope,
+            )
+        )
+
+    return WorkflowBakePlan(
+        definition={
+            "group": {"default": {"targets": [target.name for target in bake_targets]}},
+            "target": target_definitions,
+        },
+        targets=tuple(bake_targets),
+    )
+
+
 def plan_workflow_build_spec(
     request: WorkflowBuildRequest,
     *,
@@ -1054,8 +1146,8 @@ def plan_workflow_build_spec(
         build_args: list[str] = []
         resolved_base_image = ""
         if has_custom_containerfile:
-            containerfile_path = str(experiment_dir / "Containerfile")
-            docker_context = str(experiment_dir)
+            containerfile_path = f"{normalized_request.experiment_name}/Containerfile"
+            docker_context = normalized_request.experiment_name
             source_kind = "experiment-custom-containerfile"
         else:
             repo_owner = normalized_request.image_prefix.split("/", 1)[0]
@@ -1072,8 +1164,8 @@ def plan_workflow_build_spec(
                         "For external images, use full path: ghcr.io/username/image:tag"
                     )
             build_args.append(f"BASE_IMAGE={resolved_base_image}")
-            containerfile_path = str(REPO_ROOT / "Containerfiles" / "Containerfile.experiment")
-            docker_context = str(experiment_dir)
+            containerfile_path = "Containerfiles/Containerfile.experiment"
+            docker_context = normalized_request.experiment_name
             source_kind = "experiment-template"
 
         platform_builds = _workflow_platform_builds(

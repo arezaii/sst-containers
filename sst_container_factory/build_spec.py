@@ -95,3 +95,22 @@ class BuildSpec:
         if not self.platform_builds:
             raise ValueError("Build spec must contain at least one platform build")
         return self.platform_builds[0]
+
+
+@dataclass(frozen=True)
+class WorkflowBakeTargetSpec:
+    """Resolved Buildx bake target metadata for one workflow platform build."""
+
+    name: str
+    platform: str
+    arch: str
+    image_tag: str
+    cache_scope: str
+
+
+@dataclass(frozen=True)
+class WorkflowBakePlan:
+    """Concrete Buildx bake definition emitted for a workflow build."""
+
+    definition: dict[str, object]
+    targets: tuple[WorkflowBakeTargetSpec, ...]

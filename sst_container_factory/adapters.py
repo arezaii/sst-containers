@@ -46,6 +46,28 @@ def _env_flag(env: Mapping[str, str], name: str, default: str = "false") -> bool
     return env.get(name, default) == "true"
 
 
+def _workflow_build_labels(env: Mapping[str, str], build_spec: orchestration_module.BuildSpec) -> dict[str, str]:
+    """Collect workflow build labels to embed in the emitted Buildx bake file."""
+
+    labels = {
+        "com.container.type": build_spec.container_type,
+        "sst.perf_tracking": env.get("ENABLE_PERF_TRACKING", "false"),
+    }
+    github_label_fields = {
+        "com.github.sha": "GITHUB_SHA",
+        "com.github.workflow": "GITHUB_WORKFLOW",
+        "com.github.run_id": "GITHUB_RUN_ID",
+        "com.github.run_number": "GITHUB_RUN_NUMBER",
+        "com.github.repository": "GITHUB_REPOSITORY",
+        "com.github.ref_name": "GITHUB_REF_NAME",
+    }
+    for label_name, env_name in github_label_fields.items():
+        value = env.get(env_name, "")
+        if value:
+            labels[label_name] = value
+    return labels
+
+
 def local_build_request_from_env(env: Mapping[str, str] | None = None) -> LocalBuildRequest:
     """Build a local-build request object from environment variables."""
 
@@ -150,22 +172,22 @@ def workflow_build_request_from_env(env: Mapping[str, str] | None = None) -> Wor
 def prepare_workflow_build_from_env(env: Mapping[str, str] | None = None) -> orchestration_module.BuildSpec:
     """Compute the reusable-workflow build plan and publish its outputs."""
 
-    build_spec = plan_workflow_build_spec(workflow_build_request_from_env(env))
+    env_map = _env_map(env)
+    build_spec = plan_workflow_build_spec(workflow_build_request_from_env(env_map))
+    bake_plan = orchestration_module.plan_workflow_bake(
+        build_spec,
+        labels=_workflow_build_labels(env_map, build_spec),
+    )
     source_download = build_spec.source_download
     platform_matrix = {
         "include": [
             {
-                "platform": platform_build.platform,
-                "arch": platform_build.arch,
-                "image_tag": platform_build.image_tag,
-                "containerfile_path": platform_build.containerfile_path,
-                "docker_context": platform_build.docker_context,
-                "build_target": platform_build.build_target,
-                "build_args_json": json.dumps(list(platform_build.build_args)),
-                "cache_scope": f"{build_spec.container_type}-{build_spec.tag_suffix}-{platform_build.arch}",
-                "no_cache": platform_build.no_cache,
+                "platform": bake_target.platform,
+                "arch": bake_target.arch,
+                "image_tag": bake_target.image_tag,
+                "bake_target": bake_target.name,
             }
-            for platform_build in build_spec.platform_builds
+            for bake_target in bake_plan.targets
         ]
     }
 
@@ -182,6 +204,10 @@ def prepare_workflow_build_from_env(env: Mapping[str, str] | None = None) -> orc
             log_info(f"  Target:        {platform_build.build_target}")
 
     set_output("platform_matrix", json.dumps(platform_matrix, separators=(",", ":")))
+    set_output(
+        "bake_definition_json",
+        json.dumps(bake_plan.definition, separators=(",", ":"), sort_keys=True),
+    )
     set_output("manifest_tag", build_spec.publication.manifest_tag)
     set_output("resolved_tag_suffix", build_spec.tag_suffix)
     set_output("validation_mode", build_spec.verification.mode)

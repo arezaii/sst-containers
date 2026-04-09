@@ -143,6 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       platform_matrix: ${{ steps.plan.outputs.platform_matrix }}
+      bake_definition_json: ${{ steps.plan.outputs.bake_definition_json }}
       manifest_tag: ${{ steps.plan.outputs.manifest_tag }}
       resolved_tag_suffix: ${{ steps.plan.outputs.resolved_tag_suffix }}
       validation_mode: ${{ steps.plan.outputs.validation_mode }}
@@ -275,39 +276,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare build arguments
-        id: prepare-build-args
+      - name: Write Buildx bake definition
+        env:
+          BAKE_DEFINITION_JSON: ${{ needs.prepare-build-plan.outputs.bake_definition_json }}
         run: |
-          {
-            echo 'build_args<<EOF'
-            jq -r '.[]' <<'JSON'
-          ${{ matrix.build_args_json }}
-          JSON
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$BAKE_DEFINITION_JSON" > docker-bake.json
+          jq . docker-bake.json
 
       - name: Build and push container
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ matrix.docker_context }}
-          file: ${{ matrix.containerfile_path }}
-          target: ${{ matrix.build_target }}
-          platforms: ${{ matrix.platform }}
-          build-args: ${{ steps.prepare-build-args.outputs.build_args }}
-          labels: |
-            com.github.sha=${{ github.sha }}
-            com.github.workflow=${{ github.workflow }}
-            com.github.run_id=${{ github.run_id }}
-            com.github.run_number=${{ github.run_number }}
-            com.github.repository=${{ github.repository }}
-            com.github.ref_name=${{ github.ref_name }}
-            com.container.type=${{ inputs.container_type }}
-            sst.perf_tracking=${{ inputs.enable_perf_tracking }}
-          tags: ${{ matrix.image_tag }}
-          push: true
-          no-cache: ${{ matrix.no_cache }}
-          cache-from: type=gha,scope=${{ matrix.cache_scope }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+        run: |
+          docker buildx bake \
+            --file docker-bake.json \
+            --push \
+            --progress plain \
+            "${{ matrix.bake_target }}"
 
       - name: Output built image
         run: |
