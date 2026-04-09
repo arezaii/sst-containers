@@ -64,8 +64,11 @@ DEFAULT_SIZE_LIMITS_MB = {
     "custom": 4096,
     "experiment": 8192,
 }
-LOCAL_SOURCE_STAGE_ROOT_REL = ".local-sources"
-LOCAL_SST_CORE_STAGE_REL = f"{LOCAL_SOURCE_STAGE_ROOT_REL}/sst-core"
+LOCAL_SOURCE_STAGE_ROOT_REL = ".build-contexts"
+LOCAL_SST_CORE_STAGE_REL = f"{LOCAL_SOURCE_STAGE_ROOT_REL}/sst-core-input"
+LOCAL_SST_CORE_CONTEXT_NAME = "sst_core_input"
+EMPTY_BUILD_CONTEXT_ROOT_REL = "Containerfiles/empty-contexts"
+EMPTY_SST_CORE_CONTEXT_REL = f"{EMPTY_BUILD_CONTEXT_ROOT_REL}/sst-core"
 
 
 class OrchestrationError(RuntimeError):
@@ -249,6 +252,7 @@ class _ContainerBuildPlan:
     target_platform: str
     build_target: str = ""
     build_args: tuple[str, ...] = ()
+    additional_contexts: tuple[str, ...] = ()
     no_cache: bool = False
 
 
@@ -363,7 +367,13 @@ def validate_git_ref(ref: str, description: str) -> None:
 def _local_sst_core_stage_dir() -> Path:
     """Return the local SST-core stage directory inside the build context."""
 
-    return REPO_ROOT / "Containerfiles" / LOCAL_SST_CORE_STAGE_REL
+    return REPO_ROOT / LOCAL_SST_CORE_STAGE_REL
+
+
+def _empty_sst_core_context_dir() -> Path:
+    """Return the repository-tracked empty SST-core build context directory."""
+
+    return REPO_ROOT / EMPTY_SST_CORE_CONTEXT_REL
 
 
 def reset_local_source_stage_dir(stage_dir: Path | None = None) -> Path:
@@ -931,6 +941,7 @@ def _workflow_platform_builds(
     docker_context: str,
     build_target: str,
     build_args: tuple[str, ...],
+    additional_contexts: tuple[str, ...],
     no_cache: bool,
 ) -> tuple[PlatformBuildSpec, ...]:
     """Create per-platform build specs for a workflow build."""
@@ -947,6 +958,7 @@ def _workflow_platform_builds(
                 docker_context=docker_context,
                 build_target=build_target,
                 build_args=build_args,
+                additional_contexts=additional_contexts,
                 no_cache=no_cache,
             )
         )
@@ -1003,6 +1015,12 @@ def _key_value_mapping(entries: tuple[str, ...]) -> dict[str, str]:
     return mapped_entries
 
 
+def _sst_core_input_context_entry(source_path: Path) -> str:
+    """Return the named build-context mapping for the staged SST-core input."""
+
+    return f"{LOCAL_SST_CORE_CONTEXT_NAME}={source_path}"
+
+
 def _workflow_bake_target_name(build_spec: BuildSpec, platform_build: PlatformBuildSpec) -> str:
     """Return a stable Buildx bake target name for one platform build."""
 
@@ -1043,6 +1061,11 @@ def plan_workflow_bake(
             target_definition["target"] = platform_build.build_target
         if platform_build.build_args:
             target_definition["args"] = _key_value_mapping(platform_build.build_args)
+        if platform_build.additional_contexts:
+            target_definition["contexts"] = {
+                name: _workflow_bake_context_path(path, workspace_root)
+                for name, path in _key_value_mapping(platform_build.additional_contexts).items()
+            }
         if platform_build.labels or merged_labels:
             labels_map: dict[str, str] = {}
             if platform_build.labels:
@@ -1110,6 +1133,7 @@ def plan_workflow_build_spec(
                 f"mpich={normalized_request.mpich_version}",
                 f"NCPUS={normalized_request.build_ncpus}",
             ),
+            additional_contexts=(),
             no_cache=normalized_request.no_cache,
         )
         return BuildSpec(
@@ -1146,6 +1170,7 @@ def plan_workflow_build_spec(
             docker_context="Containerfiles",
             build_target="sst-core" if normalized_request.container_type == "core" else "sst-full",
             build_args=tuple(build_args),
+            additional_contexts=(),
             no_cache=normalized_request.no_cache,
         )
         return BuildSpec(
@@ -1206,6 +1231,7 @@ def plan_workflow_build_spec(
             docker_context=docker_context,
             build_target="",
             build_args=tuple(build_args),
+            additional_contexts=(),
             no_cache=normalized_request.no_cache,
         )
         return BuildSpec(
@@ -1251,6 +1277,9 @@ def plan_workflow_build_spec(
         docker_context="Containerfiles",
         build_target=build_target,
         build_args=tuple(build_args),
+        additional_contexts=(
+            _sst_core_input_context_entry(_empty_sst_core_context_dir()),
+        ),
         no_cache=normalized_request.no_cache,
     )
     return BuildSpec(
@@ -1283,6 +1312,7 @@ def _container_plan_from_platform_build(build_spec: PlatformBuildSpec) -> _Conta
         target_platform=build_spec.platform,
         build_target=build_spec.build_target,
         build_args=build_spec.build_args,
+        additional_contexts=build_spec.additional_contexts,
         no_cache=build_spec.no_cache,
     )
 
@@ -1416,6 +1446,8 @@ def _create_container_build_command(
         command.extend(["--target", plan.build_target])
     for build_arg in plan.build_args:
         command.extend(["--build-arg", build_arg])
+    for build_context in plan.additional_contexts:
+        command.extend(["--build-context", build_context])
     if plan.no_cache:
         command.append("--no-cache")
     command.append(plan.docker_context)
@@ -1436,6 +1468,9 @@ def _run_container_build(
     if plan.build_target:
         log_info(f"Using build target: {plan.build_target}")
     log_info(f"Using docker context: {plan.docker_context}")
+    if plan.additional_contexts:
+        for build_context in plan.additional_contexts:
+            log_info(f"Using additional build context: {build_context}")
 
     start_group("Building Container")
     start_time = time.monotonic()
@@ -1873,6 +1908,11 @@ def _plan_custom_build_spec(normalized_request: CustomBuildRequest) -> BuildSpec
         docker_context="Containerfiles",
         build_target=build_type,
         build_args=tuple(build_args),
+        additional_contexts=(
+            _sst_core_input_context_entry(
+                _local_sst_core_stage_dir() if using_local_core_checkout else _empty_sst_core_context_dir()
+            ),
+        ),
         no_cache=normalized_request.no_cache,
     )
     return BuildSpec(

@@ -1,8 +1,9 @@
+# syntax=docker/dockerfile:1
 # This Containerfile supports flexible SST and MPICH version building
 #
 # BUILD ARGUMENTS:
 #   SSTrepo: SST repository to use
-#   LOCAL_SST_CORE: Set to 1 to copy a staged local SST-core checkout instead of cloning
+#   LOCAL_SST_CORE: Set to 1 to use the staged `sst_core_input` build context instead of cloning
 #   tag:    repository tag name to build from
 #   SSTElementsRepo: SST-elements repository to use (optional)
 #   elementsTag: SST-elements tag/sha to build from (optional)
@@ -20,6 +21,7 @@
 # Build SST-core only (default):
 # podman build \
 #   -f Containerfile.tag \
+#   --build-context sst_core_input=Containerfiles/empty-contexts/sst-core \
 #   --build-arg SSTrepo=https://github.com/sstsimulator/sst-core.git \
 #   --build-arg tag=master \
 #   --build-arg NCPUS=4 \
@@ -28,6 +30,7 @@
 # Build SST-core + SST-elements:
 # podman build \
 #   -f Containerfile.tag \
+#   --build-context sst_core_input=Containerfiles/empty-contexts/sst-core \
 #   --build-arg SSTrepo=https://github.com/sstsimulator/sst-core.git \
 #   --build-arg tag=master \
 #   --build-arg SSTElementsRepo=https://github.com/sstsimulator/sst-elements.git \
@@ -39,6 +42,7 @@
 # Build from a staged local SST-core checkout:
 # podman build \
 #   -f Containerfile.tag \
+#   --build-context sst_core_input=/path/to/staged/sst-core \
 #   --build-arg LOCAL_SST_CORE=1 \
 #   --build-arg NCPUS=4 \
 #   --target core-build \
@@ -53,8 +57,6 @@ ARG mpich=4.0.2
 ARG mpich_prefix=mpich-$mpich
 ARG NCPUS=2
 ARG ENABLE_PERF_TRACKING=
-
-WORKDIR /tmp
 
 # Update and install packages (assumes access to package repositories)
 RUN apt update && apt install -y \
@@ -108,7 +110,7 @@ ARG elementsTag
 ARG NCPUS=2
 ARG ENABLE_PERF_TRACKING
 
-COPY .local-sources/sst-core /workspace/local-sst-core
+COPY --from=sst_core_input . /workspace/local-sst-core
 
 RUN mkdir -p /opt/SST/dev/
 
@@ -160,7 +162,7 @@ RUN if [ -z "$NCPUS" ]; then \
     rm -rf sst-elements elements-build
 
 ENV PATH="$PATH:/opt/SST/dev/bin/"
-ENV LD_LIBRARY_PATH="/opt/SST/dev/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/opt/SST/dev/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 WORKDIR /workspace
 ENTRYPOINT ["/bin/bash"]
 
@@ -174,7 +176,7 @@ ARG tag
 ARG NCPUS=2
 ARG ENABLE_PERF_TRACKING
 
-COPY .local-sources/sst-core /workspace/local-sst-core
+COPY --from=sst_core_input . /workspace/local-sst-core
 
 # Download SST-core from repo and checkout tag
 WORKDIR /workspace
@@ -207,6 +209,6 @@ RUN if [ -z "$NCPUS" ]; then \
     rm -rf sst-core build local-sst-core
 
 ENV PATH="$PATH:/opt/SST/dev/bin/"
-ENV LD_LIBRARY_PATH="/opt/SST/dev/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/opt/SST/dev/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 WORKDIR /workspace
 ENTRYPOINT ["/bin/bash"]

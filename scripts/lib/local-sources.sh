@@ -9,8 +9,8 @@ fi
 source "${SCRIPT_LIB_DIR}/logging.sh"
 source "${SCRIPT_LIB_DIR}/validation.sh"
 
-LOCAL_SOURCE_STAGE_ROOT_REL=".local-sources"
-LOCAL_SST_CORE_STAGE_REL="${LOCAL_SOURCE_STAGE_ROOT_REL}/sst-core"
+LOCAL_SOURCE_STAGE_ROOT_REL=".build-contexts"
+LOCAL_SST_CORE_STAGE_REL="${LOCAL_SOURCE_STAGE_ROOT_REL}/sst-core-input"
 LOCAL_CORE_STAGE_ACTIVE="false"
 
 cleanup_local_source_stage() {
@@ -54,7 +54,7 @@ get_local_sst_core_stage_dir() {
         return 1
     fi
 
-    echo "${project_root}/Containerfiles/${LOCAL_SST_CORE_STAGE_REL}"
+    echo "${project_root}/${LOCAL_SST_CORE_STAGE_REL}"
 }
 
 reset_local_source_stage_dir() {

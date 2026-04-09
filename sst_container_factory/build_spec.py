@@ -49,6 +49,7 @@ class PlatformBuildSpec:
     docker_context: str
     build_target: str = ""
     build_args: tuple[str, ...] = ()
+    additional_contexts: tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
     no_cache: bool = False
 
