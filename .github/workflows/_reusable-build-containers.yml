@@ -276,6 +276,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Ensure local source placeholder exists
+        if: startsWith(matrix.bake_target, 'custom-') || (inputs.container_type == 'core' && inputs.sst_version == '') || (inputs.container_type == 'full' && inputs.sst_version == '')
+        run: |
+          mkdir -p Containerfiles/.local-sources/sst-core
+          touch Containerfiles/.local-sources/sst-core/.gitkeep
+
       - name: Write Buildx bake definition
         env:
           BAKE_DEFINITION_JSON: ${{ needs.prepare-build-plan.outputs.bake_definition_json }}
