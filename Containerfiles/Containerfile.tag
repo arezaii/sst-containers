@@ -167,7 +167,7 @@ RUN if [ -z "$NCPUS" ]; then \
     rm -rf sst-elements elements-build
 
 ENV PATH="$PATH:/opt/SST/dev/bin/"
-ENV LD_LIBRARY_PATH="/opt/SST/dev/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+ENV LD_LIBRARY_PATH="/opt/SST/dev/lib"
 WORKDIR /workspace
 ENTRYPOINT ["/bin/bash"]
 
@@ -201,6 +201,6 @@ RUN if [ -z "$NCPUS" ]; then \
     rm -rf sst-core build
 
 ENV PATH="$PATH:/opt/SST/dev/bin/"
-ENV LD_LIBRARY_PATH="/opt/SST/dev/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+ENV LD_LIBRARY_PATH="/opt/SST/dev/lib"
 WORKDIR /workspace
 ENTRYPOINT ["/bin/bash"]

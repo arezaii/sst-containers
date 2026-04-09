@@ -177,7 +177,7 @@ COPY --from=elements-build /opt/SST/${SSTver} /opt/SST/${SSTver}
 COPY --from=elements-build /opt/SST/elements-${SST_ELEMENTS_VERSION} /opt/SST/elements-${SST_ELEMENTS_VERSION}
 
 ENV PATH="$PATH:/opt/SST/${SSTver}/bin/"
-ENV LD_LIBRARY_PATH="/opt/SST/${SSTver}/lib:/opt/SST/elements-${SST_ELEMENTS_VERSION}/lib:$LD_LIBRARY_PATH"
+ENV LD_LIBRARY_PATH="/opt/SST/${SSTver}/lib:/opt/SST/elements-${SST_ELEMENTS_VERSION}/lib"
 WORKDIR /workspace
 ENTRYPOINT ["/bin/bash"]
 
@@ -190,6 +190,6 @@ ARG SSTver=15.1.2
 COPY --from=core-build /opt/SST/${SSTver} /opt/SST/${SSTver}
 
 ENV PATH="$PATH:/opt/SST/${SSTver}/bin/"
-ENV LD_LIBRARY_PATH="/opt/SST/${SSTver}/lib:$LD_LIBRARY_PATH"
+ENV LD_LIBRARY_PATH="/opt/SST/${SSTver}/lib"
 WORKDIR /workspace
 ENTRYPOINT ["/bin/bash"]

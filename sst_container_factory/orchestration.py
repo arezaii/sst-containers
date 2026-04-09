@@ -2114,6 +2114,7 @@ def _validate_local_build_image(
         image_tag=image_tag,
         target_platform=target_platform,
         max_size_mb=build_spec.verification.max_size_mb,
+        validation_profile="development" if build_spec.container_type == "dev" else "runtime",
         skip_message="Skipping validation (validation mode: none)",
         quick_success_message="Quick container validation passed",
         metadata_success_message="Metadata-only container validation passed",
@@ -2315,7 +2316,13 @@ def quick_validate_image(engine: str, image_tag: str) -> None:
     log_success("Quick validation passed")
 
 
-def metadata_validate_image(engine: str, image_tag: str, max_size_mb: int) -> None:
+def metadata_validate_image(
+    engine: str,
+    image_tag: str,
+    max_size_mb: int,
+    *,
+    validation_profile: str = "runtime",
+) -> None:
     """Perform metadata-only validation without running the container."""
 
     log_info(f"No-exec validation of {image_tag}")
@@ -2333,8 +2340,13 @@ def metadata_validate_image(engine: str, image_tag: str, max_size_mb: int) -> No
 
     config_env = metadata.get("Config", {}).get("Env", []) or []
     joined_env = "\n".join(config_env).lower()
-    if "path" in joined_env and ("sst" in joined_env or "mpi" in joined_env):
-        log_success("Expected environment variables found")
+    if validation_profile == "development":
+        if "path" in joined_env or "lang=" in joined_env or "lc_all=" in joined_env:
+            log_success("Expected development image environment variables found")
+        else:
+            log_info("Development image environment-variable check skipped")
+    elif "path" in joined_env and ("sst" in joined_env or "mpi" in joined_env):
+        log_success("Expected runtime environment variables found")
     else:
         log_warning("Expected SST/MPI environment variables not clearly visible")
 
@@ -2611,6 +2623,7 @@ def _run_image_validation(
     image_tag: str,
     target_platform: str,
     max_size_mb: int,
+    validation_profile: str = "runtime",
     pre_message: str | None = None,
     skip_message: str | None = None,
     group_name: str | None = None,
@@ -2639,7 +2652,12 @@ def _run_image_validation(
             return None
 
         if validation_mode == "metadata":
-            metadata_validate_image(container_engine, image_tag, max_size_mb)
+            metadata_validate_image(
+                container_engine,
+                image_tag,
+                max_size_mb,
+                validation_profile=validation_profile,
+            )
             log_success(metadata_success_message)
             if return_image_size:
                 metadata = _inspect_image_json(container_engine, image_tag)
