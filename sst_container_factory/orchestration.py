@@ -178,8 +178,8 @@ class SourceBuildRequest:
 
 
 @dataclass(frozen=True)
-class LocalBuildResult:
-    """Resolved local build outputs."""
+class BuildResult:
+    """Resolved build entrypoint outputs."""
 
     image_tag: str
     container_type: str
@@ -187,8 +187,8 @@ class LocalBuildResult:
 
 
 @dataclass(frozen=True)
-class LocalBuildRequest:
-    """Explicit local-build inputs."""
+class BuildRequest:
+    """Explicit build entrypoint inputs."""
 
     container_type: str
     target_platform: str
@@ -550,8 +550,8 @@ def normalize_experiment_build_request(request: ExperimentBuildRequest) -> Exper
     )
 
 
-def normalize_local_build_request(request: LocalBuildRequest) -> LocalBuildRequest:
-    """Validate and normalize local-build inputs."""
+def normalize_build_request(request: BuildRequest) -> BuildRequest:
+    """Validate and normalize build entrypoint inputs."""
 
     if request.container_type not in {"core", "full", "dev", "custom", "experiment"}:
         raise ValueError("Container type is required")
@@ -876,8 +876,8 @@ def normalize_workflow_build_request(request: WorkflowBuildRequest) -> WorkflowB
     )
 
 
-def _source_download_spec_for_local_build(request: LocalBuildRequest) -> SourceDownloadSpec:
-    """Create the source-download plan for a local build request."""
+def _source_download_spec_for_build(request: BuildRequest) -> SourceDownloadSpec:
+    """Create the source-download plan for a build entrypoint request."""
 
     destination_dir = str(REPO_ROOT / "Containerfiles")
     if request.container_type == "core":
@@ -1326,11 +1326,11 @@ def _container_plan_from_platform_build(build_spec: PlatformBuildSpec) -> _Conta
     )
 
 
-def _plan_standard_local_build_spec(normalized_request: LocalBuildRequest) -> BuildSpec:
-    """Create the shared build spec for local core, full, and dev builds."""
+def _plan_standard_build_spec(normalized_request: BuildRequest) -> BuildSpec:
+    """Create the shared build spec for core, full, and dev build requests."""
 
     if normalized_request.container_type not in {"core", "full", "dev"}:
-        raise ValueError("Standard local build planning requires core, full, or dev")
+        raise ValueError("Standard build planning requires core, full, or dev")
 
     arch = platform_to_arch(normalized_request.target_platform)
     containerfile = REPO_ROOT / "Containerfiles" / (
@@ -1431,7 +1431,7 @@ def _plan_standard_local_build_spec(normalized_request: LocalBuildRequest) -> Bu
             normalized_request.target_platform,
         ),
         publication=_local_publication_spec(image_tag),
-        source_download=_source_download_spec_for_local_build(normalized_request),
+        source_download=_source_download_spec_for_build(normalized_request),
     )
 
 
@@ -1676,7 +1676,7 @@ def _run_command(
 
 
 def _last_built_image_path() -> Path:
-    """Return the path to the local-build tag marker file."""
+    """Return the path to the build entrypoint tag marker file."""
 
     return REPO_ROOT / ".last_built_image"
 
@@ -1697,19 +1697,19 @@ def _read_last_built_image() -> str:
 
 
 def _remove_last_built_image() -> None:
-    """Remove the local-build tag marker file if it exists."""
+    """Remove the build entrypoint tag marker file if it exists."""
 
     marker_path = _last_built_image_path()
     if marker_path.exists():
         marker_path.unlink()
 
 
-def _download_local_build_sources(
+def _download_build_sources(
     download_spec: SourceDownloadSpec,
     *,
     download_script_override: str = "",
 ) -> None:
-    """Download the source tarballs required for a local build."""
+    """Download the source tarballs required for the build entrypoint."""
 
     log_info("Downloading source files...")
     if download_script_override:
@@ -1743,13 +1743,13 @@ def _download_local_build_sources(
     log_success("Source files ready")
 
 
-def _build_standard_local_image(build_spec: BuildSpec, *, container_engine: str) -> str:
-    """Build a core, full, or dev image for the local-build entrypoint."""
+def _build_standard_image(build_spec: BuildSpec, *, container_engine: str) -> str:
+    """Build a core, full, or dev image for the build entrypoint."""
 
     _run_container_build(
         _container_plan_from_platform_build(build_spec.primary_platform_build),
         container_engine=container_engine,
-        failure_message="Local container build failed",
+        failure_message="Container build failed",
     )
     return build_spec.primary_platform_build.image_tag
 
@@ -1841,7 +1841,7 @@ def _delegate_local_experiment_build(
     no_cache: bool,
     container_engine: str,
 ) -> str:
-    """Delegate a local-build experiment image build to the canonical experiment entrypoint."""
+    """Delegate a build entrypoint experiment image build to the canonical experiment entrypoint."""
 
     if not experiment_name:
         raise OrchestrationError("Experiment builds require an experiment name")
@@ -2037,16 +2037,16 @@ def plan_experiment_build_spec(
     )
 
 
-def plan_local_build_spec(
-    request: LocalBuildRequest,
+def plan_build_spec(
+    request: BuildRequest,
     *,
     container_engine: str | None = None,
 ) -> BuildSpec:
-    """Return the shared build spec for a local build request."""
+    """Return the shared build spec for a build entrypoint request."""
 
-    normalized_request = normalize_local_build_request(request)
+    normalized_request = normalize_build_request(request)
     if normalized_request.container_type in {"core", "full", "dev"}:
-        return _plan_standard_local_build_spec(normalized_request)
+        return _plan_standard_build_spec(normalized_request)
     if normalized_request.container_type == "custom":
         custom_spec = _plan_source_build_spec(
             normalize_source_build_request(
@@ -2071,7 +2071,7 @@ def plan_local_build_spec(
         return replace(
             custom_spec,
             build_kind="local",
-            source_download=_source_download_spec_for_local_build(normalized_request),
+            source_download=_source_download_spec_for_build(normalized_request),
             verification=_verification_spec(
                 "custom",
                 normalized_request.validation_mode,
@@ -2098,7 +2098,7 @@ def plan_local_build_spec(
         return replace(
             experiment_spec,
             build_kind="local",
-            source_download=_source_download_spec_for_local_build(normalized_request),
+            source_download=_source_download_spec_for_build(normalized_request),
             verification=_verification_spec(
                 "experiment",
                 normalized_request.validation_mode,
@@ -2108,14 +2108,14 @@ def plan_local_build_spec(
     raise OrchestrationError(f"Unknown container type: {normalized_request.container_type}")
 
 
-def _validate_local_build_image(
+def _validate_build_image(
     *,
     build_spec: BuildSpec,
     container_engine: str,
     image_tag: str,
     target_platform: str,
 ) -> int | None:
-    """Validate an image produced by the local-build entrypoint."""
+    """Validate an image produced by the build entrypoint."""
 
     log_info(f"Validating container: {image_tag}")
     return _run_image_validation(
@@ -2133,8 +2133,8 @@ def _validate_local_build_image(
     )
 
 
-def _cleanup_local_build(container_engine: str, image_tag: str) -> None:
-    """Remove the built image, marker file, and builder cache for local-build."""
+def _cleanup_build(container_engine: str, image_tag: str) -> None:
+    """Remove the built image, marker file, and builder cache for the build entrypoint."""
 
     log_info("Cleaning up...")
     log_info(f"Removing image: {image_tag}")
@@ -2152,18 +2152,19 @@ def _cleanup_local_build(container_engine: str, image_tag: str) -> None:
     log_success("Cleanup completed")
 
 
-def local_build(request: LocalBuildRequest) -> LocalBuildResult:
-    """Execute the local-build path from explicit arguments."""
+def build(request: BuildRequest) -> BuildResult:
+    """Execute the build entrypoint path from explicit arguments."""
 
-    normalized_request = normalize_local_build_request(request)
+    normalized_request = normalize_build_request(request)
     container_engine = detect_container_engine(normalized_request.container_engine)
-    build_spec = plan_local_build_spec(
+    build_spec = plan_build_spec(
         normalized_request,
         container_engine=container_engine,
     )
     sst_elements_version = normalized_request.sst_elements_version or normalized_request.sst_version
 
-    log_info("=== Local Container Build ===")
+    log_info("=== Build Entry Point ===")
+    log_info("Execution Mode: local")
     log_info(f"Container Type: {normalized_request.container_type}")
     log_info(f"Platform: {normalized_request.target_platform}")
     log_info(f"Container Engine: {container_engine}")
@@ -2172,7 +2173,7 @@ def local_build(request: LocalBuildRequest) -> LocalBuildResult:
     if sst_elements_version:
         log_info(f"SST Elements Version: {sst_elements_version}")
     log_info(f"MPICH Version: {normalized_request.mpich_version}")
-    log_info("Starting local build sequence...")
+    log_info("Starting build sequence...")
 
     image_tag = ""
     image_size_mb: int | None = None
@@ -2184,15 +2185,15 @@ def local_build(request: LocalBuildRequest) -> LocalBuildResult:
                 )
 
             if build_spec.source_download is None:
-                raise OrchestrationError("Local build spec did not include a download plan")
+                raise OrchestrationError("Build spec did not include a download plan")
 
-            _download_local_build_sources(
+            _download_build_sources(
                 build_spec.source_download,
                 download_script_override=normalized_request.download_script,
             )
 
             if normalized_request.container_type in {"core", "full", "dev"}:
-                image_tag = _build_standard_local_image(
+                image_tag = _build_standard_image(
                     build_spec,
                     container_engine=container_engine,
                 )
@@ -2232,7 +2233,7 @@ def local_build(request: LocalBuildRequest) -> LocalBuildResult:
             if not image_tag:
                 raise OrchestrationError("No image tag specified for validation")
 
-        image_size_mb = _validate_local_build_image(
+        image_size_mb = _validate_build_image(
             build_spec=build_spec,
             container_engine=container_engine,
             image_tag=image_tag,
@@ -2240,13 +2241,13 @@ def local_build(request: LocalBuildRequest) -> LocalBuildResult:
         )
 
         if normalized_request.cleanup:
-            _cleanup_local_build(container_engine, image_tag)
+            _cleanup_build(container_engine, image_tag)
         else:
             log_info("Image preserved. Use --cleanup to remove after the build.")
             log_info(f"Built image: {image_tag}")
 
         log_success("Build sequence completed successfully!")
-        return LocalBuildResult(
+        return BuildResult(
             image_tag=image_tag,
             container_type=normalized_request.container_type,
             image_size_mb=image_size_mb,

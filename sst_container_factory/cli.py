@@ -23,8 +23,8 @@ from .orchestration import (
     DEFAULT_SST_VERSION,
     detect_host_platform,
     download_sources,
-    local_build,
-    LocalBuildRequest,
+    build,
+    BuildRequest,
     require_host_platform,
     require_single_host_platform,
 )
@@ -77,13 +77,13 @@ def _handle_download_sources(args: argparse.Namespace) -> None:
     )
 
 
-def _handle_local_build(args: argparse.Namespace) -> None:
+def _handle_build(args: argparse.Namespace) -> None:
     """Dispatch the explicit build CLI."""
 
     container_type = "custom" if args.container_type == "source" else args.container_type
 
-    local_build(
-        LocalBuildRequest(
+    build(
+        BuildRequest(
             container_type=container_type,
             target_platform=args.platform,
             validation_mode=args.validation,
@@ -348,7 +348,7 @@ Examples:
     local_core_parser = _add_parser(
         local_build_subparsers,
         "core",
-        _handle_local_build,
+        _handle_build,
         help="Build SST-core only",
         description="Build an SST-core release image locally.",
     )
@@ -358,7 +358,7 @@ Examples:
     local_full_parser = _add_parser(
         local_build_subparsers,
         "full",
-        _handle_local_build,
+        _handle_build,
         help="Build SST-core + SST-elements",
         description="Build an SST full release image locally.",
     )
@@ -368,7 +368,7 @@ Examples:
     local_dev_parser = _add_parser(
         local_build_subparsers,
         "dev",
-        _handle_local_build,
+        _handle_build,
         help="Build the development image",
         description="Build the development image locally.",
     )
@@ -378,7 +378,7 @@ Examples:
     local_custom_parser = _add_parser(
         local_build_subparsers,
         "source",
-        _handle_local_build,
+        _handle_build,
         help="Build from a local checkout or selected repository/ref",
         description="Build an SST image from a local checkout or selected repository/ref.",
     )
@@ -388,7 +388,7 @@ Examples:
     local_experiment_parser = _add_parser(
         local_build_subparsers,
         "experiment",
-        _handle_local_build,
+        _handle_build,
         help="Build an experiment container",
         description="Build an experiment image through the build entry point.",
     )

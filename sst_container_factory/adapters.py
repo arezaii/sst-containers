@@ -23,9 +23,9 @@ from .orchestration import (
     ExperimentBuildRequest,
     ExperimentBuildResult,
     experiment_build,
-    LocalBuildRequest,
-    LocalBuildResult,
-    local_build,
+    BuildRequest,
+    BuildResult,
+    build,
     plan_workflow_build_spec,
     PrepareImageConfigResult,
     ValidateContainerResult,
@@ -69,12 +69,12 @@ def _workflow_build_labels(env: Mapping[str, str], build_spec: orchestration_mod
     return labels
 
 
-def local_build_request_from_env(env: Mapping[str, str] | None = None) -> LocalBuildRequest:
-    """Build a local-build request object from environment variables."""
+def build_request_from_env(env: Mapping[str, str] | None = None) -> BuildRequest:
+    """Build a request object for the build entrypoint from environment variables."""
 
     env_map = _env_map(env)
     sst_version = env_map.get("SST_VERSION", DEFAULT_SST_VERSION)
-    return LocalBuildRequest(
+    return BuildRequest(
         container_type=env_map.get("CONTAINER_TYPE", ""),
         validate_only=_env_flag(env_map, "VALIDATE_ONLY"),
         validation_mode=env_map.get("VALIDATION_MODE", "full"),
@@ -397,10 +397,10 @@ def validate_experiment_inputs_from_env(env: Mapping[str, str] | None = None) ->
     )
 
 
-def local_build_from_env(env: Mapping[str, str] | None = None) -> LocalBuildResult:
-    """Execute the local-build path from normalized environment variables."""
+def build_from_env(env: Mapping[str, str] | None = None) -> BuildResult:
+    """Execute the build entrypoint path from normalized environment variables."""
 
-    return local_build(local_build_request_from_env(env))
+    return build(build_request_from_env(env))
 
 
 def experiment_build_from_env(env: Mapping[str, str] | None = None) -> ExperimentBuildResult:
