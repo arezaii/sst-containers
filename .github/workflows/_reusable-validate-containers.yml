@@ -95,4 +95,4 @@ jobs:
           MAX_SIZE_MB: ${{ inputs.max_image_size_mb }}
           VALIDATION_MODE: ${{ inputs.validation_mode }}
           PYTHONPATH: ${{ github.workspace }}
-        run: python3 -m sst_container_factory.cli validate-container
+        run: python3 -m sst_container_factory.cli workflow-validate-container

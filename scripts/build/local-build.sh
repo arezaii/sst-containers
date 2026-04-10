@@ -8,4 +8,9 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
-exec "$PYTHON_BIN" -m sst_container_factory.cli local-build "$@"
+if [[ ${1:-} == "custom" ]]; then
+	shift
+	set -- source "$@"
+fi
+
+exec "$PYTHON_BIN" -m sst_container_factory.cli build "$@"

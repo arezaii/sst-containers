@@ -8,4 +8,4 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
-exec "$PYTHON_BIN" -m sst_container_factory.cli download-tarballs "$@"
+exec "$PYTHON_BIN" -m sst_container_factory.cli build "$@"

@@ -12,9 +12,9 @@ from . import orchestration as orchestration_module
 from .github_actions import end_group, set_output, start_group
 from .logging_utils import log_error, log_info, log_success
 from .orchestration import (
-    CustomBuildRequest,
-    CustomBuildResult,
-    custom_build,
+    SourceBuildRequest,
+    SourceBuildResult,
+    source_build,
     DEFAULT_BUILD_NCPUS,
     DEFAULT_MPICH_VERSION,
     DEFAULT_REGISTRY,
@@ -29,7 +29,7 @@ from .orchestration import (
     plan_workflow_build_spec,
     PrepareImageConfigResult,
     ValidateContainerResult,
-    ValidateCustomInputsResult,
+    ValidateSourceInputsResult,
     ValidateExperimentInputsResult,
     WorkflowBuildRequest,
 )
@@ -102,7 +102,7 @@ def local_build_request_from_env(env: Mapping[str, str] | None = None) -> LocalB
 
 
 def experiment_build_request_from_env(env: Mapping[str, str] | None = None) -> ExperimentBuildRequest:
-    """Build an experiment-build request object from environment variables."""
+    """Build an experiment request object from environment variables."""
 
     env_map = _env_map(env)
     return ExperimentBuildRequest(
@@ -118,11 +118,11 @@ def experiment_build_request_from_env(env: Mapping[str, str] | None = None) -> E
     )
 
 
-def custom_build_request_from_env(env: Mapping[str, str] | None = None) -> CustomBuildRequest:
-    """Build a custom-build request object from environment variables."""
+def source_build_request_from_env(env: Mapping[str, str] | None = None) -> SourceBuildRequest:
+    """Build a source-build request object from environment variables."""
 
     env_map = _env_map(env)
-    return CustomBuildRequest(
+    return SourceBuildRequest(
         target_platform=env_map.get("TARGET_PLATFORM", ""),
         tag_suffix=env_map.get("TAG_SUFFIX", ""),
         sst_core_path=env_map.get("SST_CORE_PATH", ""),
@@ -293,7 +293,7 @@ def prepare_image_config_from_env(env: Mapping[str, str] | None = None) -> Prepa
     return result
 
 
-def validate_custom_inputs_from_env(env: Mapping[str, str] | None = None) -> ValidateCustomInputsResult:
+def validate_source_inputs_from_env(env: Mapping[str, str] | None = None) -> ValidateSourceInputsResult:
     """Validate build-custom workflow inputs from environment variables."""
 
     env_map = _env_map(env)
@@ -305,7 +305,7 @@ def validate_custom_inputs_from_env(env: Mapping[str, str] | None = None) -> Val
     if not core_ref:
         raise ValueError("CORE_REF (sst_core_ref input) is required")
 
-    start_group("Validate Custom Build Inputs")
+    start_group("Validate Source Build Inputs")
     if elements_repo:
         if not elements_ref:
             raise ValueError(
@@ -324,7 +324,7 @@ def validate_custom_inputs_from_env(env: Mapping[str, str] | None = None) -> Val
         log_info(f"Tag suffix: {tag_suffix} (derived from core ref)")
     end_group()
 
-    result = ValidateCustomInputsResult(build_type=build_type, tag_suffix=tag_suffix)
+    result = ValidateSourceInputsResult(build_type=build_type, tag_suffix=tag_suffix)
     set_output("build_type", result.build_type)
     set_output("tag_suffix", result.tag_suffix)
     log_success(
@@ -409,10 +409,10 @@ def experiment_build_from_env(env: Mapping[str, str] | None = None) -> Experimen
     return experiment_build(experiment_build_request_from_env(env))
 
 
-def custom_build_from_env(env: Mapping[str, str] | None = None) -> CustomBuildResult:
-    """Execute the custom build path from normalized environment variables."""
+def source_build_from_env(env: Mapping[str, str] | None = None) -> SourceBuildResult:
+    """Execute the source build path from normalized environment variables."""
 
-    return custom_build(custom_build_request_from_env(env))
+    return source_build(source_build_request_from_env(env))
 
 
 def validate_container_from_env(env: Mapping[str, str] | None = None) -> ValidateContainerResult:

@@ -86,7 +86,7 @@ class PrepareImageConfigResult:
 
 
 @dataclass(frozen=True)
-class ValidateCustomInputsResult:
+class ValidateSourceInputsResult:
     """Resolved build settings for the custom workflow."""
 
     build_type: str
@@ -138,7 +138,7 @@ class ExperimentBuildRequest:
 
 
 @dataclass(frozen=True)
-class DownloadTarballsResult:
+class DownloadSourcesResult:
     """Resolved tarball download outputs."""
 
     requested_files: tuple[str, ...]
@@ -147,8 +147,8 @@ class DownloadTarballsResult:
 
 
 @dataclass(frozen=True)
-class CustomBuildResult:
-    """Resolved custom build outputs."""
+class SourceBuildResult:
+    """Resolved source build outputs."""
 
     image_tag: str
     build_type: str
@@ -156,8 +156,8 @@ class CustomBuildResult:
 
 
 @dataclass(frozen=True)
-class CustomBuildRequest:
-    """Explicit custom build inputs."""
+class SourceBuildRequest:
+    """Explicit source build inputs."""
 
     target_platform: str
     tag_suffix: str
@@ -491,8 +491,8 @@ def stage_local_sst_core_checkout(source_dir: str, stage_dir: Path | None = None
     return resolved_stage_dir
 
 
-def normalize_custom_build_request(request: CustomBuildRequest) -> CustomBuildRequest:
-    """Validate and normalize custom-build inputs."""
+def normalize_source_build_request(request: SourceBuildRequest) -> SourceBuildRequest:
+    """Validate and normalize source-build inputs."""
 
     normalized_request = replace(request)
     if normalized_request.sst_core_path:
@@ -521,7 +521,7 @@ def normalize_custom_build_request(request: CustomBuildRequest) -> CustomBuildRe
         normalized_request.target_platform or detect_host_platform()
     )
 
-    derived_tag_suffix = derive_custom_tag_suffix(
+    derived_tag_suffix = derive_source_tag_suffix(
         normalized_request.tag_suffix,
         sst_core_path=normalized_request.sst_core_path,
         sst_core_ref=normalized_request.sst_core_ref,
@@ -536,7 +536,7 @@ def normalize_custom_build_request(request: CustomBuildRequest) -> CustomBuildRe
 
 
 def normalize_experiment_build_request(request: ExperimentBuildRequest) -> ExperimentBuildRequest:
-    """Validate and normalize experiment-build inputs."""
+    """Validate and normalize experiment build inputs."""
 
     if not request.experiment_name:
         raise ValueError("Experiment name is required")
@@ -631,7 +631,7 @@ def sanitize_tag_suffix(raw_value: str) -> str:
     return sanitized[:50]
 
 
-def derive_custom_tag_suffix(
+def derive_source_tag_suffix(
     tag_suffix: str,
     *,
     sst_core_path: str = "",
@@ -670,13 +670,13 @@ def generate_experiment_image_tag(
     return f"{registry}/{experiment_name}:{tag_suffix}-{arch}"
 
 
-def generate_custom_image_tag(
+def generate_source_image_tag(
     registry: str,
     tag_suffix: str,
     arch: str,
     enable_perf_tracking: bool,
 ) -> str:
-    """Generate the canonical custom build image tag."""
+    """Generate the canonical source build image tag."""
 
     image_name = "sst-perf-track-custom" if enable_perf_tracking else "sst-custom"
     return f"{registry}/{image_name}:{tag_suffix}-{arch}"
@@ -836,7 +836,7 @@ def normalize_workflow_build_request(request: WorkflowBuildRequest) -> WorkflowB
             validate_git_ref(normalized_request.sst_elements_ref, "SST-elements reference")
         return replace(
             normalized_request,
-            tag_suffix=derive_custom_tag_suffix(
+            tag_suffix=derive_source_tag_suffix(
                 normalized_request.tag_suffix,
                 sst_core_ref=normalized_request.sst_core_ref,
                 sst_elements_repo=normalized_request.sst_elements_repo,
@@ -1552,7 +1552,7 @@ def _download_requested_file(url: str, destination: Path, description: str) -> N
     log_info(f"File size: {size_mb} MB")
 
 
-def download_tarballs(
+def download_sources(
     *,
     sst_version: str = DEFAULT_SST_VERSION,
     sst_elements_version: str | None = None,
@@ -1562,7 +1562,7 @@ def download_tarballs(
     download_sst_elements: bool = True,
     force_mode: bool = False,
     destination_dir: Path | None = None,
-) -> DownloadTarballsResult:
+) -> DownloadSourcesResult:
     """Download the requested build source tarballs into a directory."""
 
     destination = destination_dir or Path.cwd()
@@ -1649,7 +1649,7 @@ def download_tarballs(
         )
 
     log_success("All requested files downloaded successfully!")
-    return DownloadTarballsResult(
+    return DownloadSourcesResult(
         requested_files=tuple(requested_files),
         total_size_mb=total_size_mb,
         destination_dir=str(destination),
@@ -1729,7 +1729,7 @@ def _download_local_build_sources(
         if result.returncode != 0:
             raise OrchestrationError("Failed to download required source files")
     else:
-        download_tarballs(
+        download_sources(
             sst_version=download_spec.sst_version or DEFAULT_SST_VERSION,
             sst_elements_version=download_spec.sst_elements_version or None,
             mpich_version=download_spec.mpich_version or DEFAULT_MPICH_VERSION,
@@ -1754,7 +1754,7 @@ def _build_standard_local_image(build_spec: BuildSpec, *, container_engine: str)
     return build_spec.primary_platform_build.image_tag
 
 
-def _local_custom_build_request(
+def _local_source_build_request(
     *,
     registry: str,
     target_platform: str,
@@ -1770,10 +1770,10 @@ def _local_custom_build_request(
     sst_elements_repo: str,
     sst_elements_ref: str,
     container_engine: str | None,
-) -> CustomBuildRequest:
-    """Translate a local custom build request into the canonical custom-build request."""
+) -> SourceBuildRequest:
+    """Translate a local source-backed build request into the canonical source-build request."""
 
-    return CustomBuildRequest(
+    return SourceBuildRequest(
         target_platform=target_platform,
         tag_suffix=tag_suffix if tag_suffix_set else "",
         sst_core_ref=sst_core_ref,
@@ -1792,7 +1792,7 @@ def _local_custom_build_request(
     )
 
 
-def _delegate_local_custom_build(
+def _delegate_local_source_build(
     *,
     registry: str,
     target_platform: str,
@@ -1809,9 +1809,9 @@ def _delegate_local_custom_build(
     sst_elements_ref: str,
     container_engine: str,
 ) -> str:
-    """Delegate a local-build custom image build to the canonical custom-build entrypoint."""
-    result = custom_build(
-        _local_custom_build_request(
+    """Delegate a local build source image request to the canonical source-build path."""
+    result = source_build(
+        _local_source_build_request(
             registry=registry,
             target_platform=target_platform,
             mpich_version=mpich_version,
@@ -1861,13 +1861,13 @@ def _delegate_local_experiment_build(
     return result.image_tag
 
 
-def _plan_custom_build_spec(normalized_request: CustomBuildRequest) -> BuildSpec:
-    """Create the shared build spec for a custom build request."""
+def _plan_source_build_spec(normalized_request: SourceBuildRequest) -> BuildSpec:
+    """Create the shared build spec for a source build request."""
 
     build_type = "full-build" if normalized_request.sst_elements_repo else "core-build"
     using_local_core_checkout = bool(normalized_request.sst_core_path)
     arch = platform_to_arch(normalized_request.target_platform)
-    image_tag = generate_custom_image_tag(
+    image_tag = generate_source_image_tag(
         normalized_request.registry,
         normalized_request.tag_suffix,
         arch,
@@ -1939,10 +1939,10 @@ def _plan_custom_build_spec(normalized_request: CustomBuildRequest) -> BuildSpec
     )
 
 
-def plan_custom_build_spec(request: CustomBuildRequest) -> BuildSpec:
-    """Return the shared build spec for a custom build request."""
+def plan_source_build_spec(request: SourceBuildRequest) -> BuildSpec:
+    """Return the shared build spec for a source build request."""
 
-    return _plan_custom_build_spec(normalize_custom_build_request(request))
+    return _plan_source_build_spec(normalize_source_build_request(request))
 
 
 def _plan_experiment_build_spec(
@@ -2048,9 +2048,9 @@ def plan_local_build_spec(
     if normalized_request.container_type in {"core", "full", "dev"}:
         return _plan_standard_local_build_spec(normalized_request)
     if normalized_request.container_type == "custom":
-        custom_spec = _plan_custom_build_spec(
-            normalize_custom_build_request(
-                _local_custom_build_request(
+        custom_spec = _plan_source_build_spec(
+            normalize_source_build_request(
+                _local_source_build_request(
                     registry=normalized_request.registry,
                     target_platform=normalized_request.target_platform,
                     mpich_version=normalized_request.mpich_version,
@@ -2197,7 +2197,7 @@ def local_build(request: LocalBuildRequest) -> LocalBuildResult:
                     container_engine=container_engine,
                 )
             elif normalized_request.container_type == "custom":
-                image_tag = _delegate_local_custom_build(
+                image_tag = _delegate_local_source_build(
                     registry=normalized_request.registry,
                     target_platform=normalized_request.target_platform,
                     mpich_version=normalized_request.mpich_version,
@@ -2470,17 +2470,17 @@ def experiment_build(request: ExperimentBuildRequest) -> ExperimentBuildResult:
     )
 
 
-def custom_build(request: CustomBuildRequest) -> CustomBuildResult:
-    """Execute the custom build path from explicit arguments."""
+def source_build(request: SourceBuildRequest) -> SourceBuildResult:
+    """Execute the source build path from explicit arguments."""
 
-    normalized_request = normalize_custom_build_request(request)
-    build_spec = _plan_custom_build_spec(normalized_request)
+    normalized_request = normalize_source_build_request(request)
+    build_spec = _plan_source_build_spec(normalized_request)
     platform_build = build_spec.primary_platform_build
     build_type = platform_build.build_target
     using_local_core_checkout = build_spec.source.uses_local_core_checkout
     container_engine = detect_container_engine(normalized_request.container_engine)
 
-    start_group("Custom SST Container Build")
+    start_group("Source SST Container Build")
     log_info("Build Configuration:")
     if using_local_core_checkout:
         log_info(f"  SST Core Checkout: {normalized_request.sst_core_path}")
@@ -2535,7 +2535,7 @@ def custom_build(request: CustomBuildRequest) -> CustomBuildResult:
             ):
                 log_success("Image cleaned up successfully")
 
-        log_success("Custom build completed successfully")
+        log_success("Source build completed successfully")
         log_info(f"Image: {platform_build.image_tag}")
 
         if normalized_request.github_actions_mode or os.environ.get("GITHUB_ACTIONS") == "true":
@@ -2545,7 +2545,7 @@ def custom_build(request: CustomBuildRequest) -> CustomBuildResult:
             set_output("platform", normalized_request.target_platform)
             set_output("build-successful", "true")
 
-        return CustomBuildResult(
+        return SourceBuildResult(
             image_tag=platform_build.image_tag,
             build_type=build_type,
             image_size_mb=image_size_mb,

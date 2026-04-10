@@ -128,7 +128,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
           PYTHONPATH: ${{ github.workspace }}
-        run: python3 -m sst_container_factory.cli prepare-workflow-build
+        run: python3 -m sst_container_factory.cli workflow-prepare-build
 
       - name: Write Buildx bake definition
         env:

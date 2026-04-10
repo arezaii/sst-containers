@@ -182,7 +182,7 @@ jobs:
           TAG_AS_LATEST: ${{ inputs.tag_as_latest }}
           PUBLISH_MASTER_LATEST: ${{ inputs.publish_master_latest }}
           PYTHONPATH: ${{ github.workspace }}
-        run: python3 -m sst_container_factory.cli prepare-workflow-build
+        run: python3 -m sst_container_factory.cli workflow-prepare-build
 
   build-containers:
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
@@ -207,7 +207,7 @@ jobs:
       - name: Download MPICH source
         if: needs.prepare-build-plan.outputs.download_mpich == 'true' && steps.cache-mpich.outputs.cache-hit != 'true'
         working-directory: Containerfiles
-        run: PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-tarballs --mpich-version ${{ needs.prepare-build-plan.outputs.mpich_version }}
+        run: PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-sources --mpich-version ${{ needs.prepare-build-plan.outputs.mpich_version }}
 
       - name: Determine SST cache key and paths
         id: sst-cache-config
@@ -246,9 +246,9 @@ jobs:
         working-directory: Containerfiles
         run: |
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
-            PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-tarballs --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}"
+            PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-sources --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}"
           else
-            PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-tarballs --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}"
+            PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-sources --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}"
           fi
 
       - name: Validate SST sources

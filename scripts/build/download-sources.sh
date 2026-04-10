@@ -8,4 +8,4 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 export PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
-exec "$PYTHON_BIN" -m sst_container_factory.cli experiment-build "$@"
+exec "$PYTHON_BIN" -m sst_container_factory.cli download-sources "$@"

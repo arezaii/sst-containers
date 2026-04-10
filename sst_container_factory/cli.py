@@ -11,22 +11,18 @@ from .adapters import (
     prepare_image_config_from_env,
     prepare_workflow_build_from_env,
     validate_container_from_env,
-    validate_custom_inputs_from_env,
+    validate_source_inputs_from_env,
     validate_experiment_inputs_from_env,
 )
 
 from .logging_utils import log_error
 from .orchestration import (
-    custom_build,
-    CustomBuildRequest,
     DEFAULT_BUILD_NCPUS,
     DEFAULT_SST_CORE_REPO,
     DEFAULT_MPICH_VERSION,
     DEFAULT_SST_VERSION,
     detect_host_platform,
-    download_tarballs,
-    experiment_build,
-    ExperimentBuildRequest,
+    download_sources,
     local_build,
     LocalBuildRequest,
     require_host_platform,
@@ -60,33 +56,8 @@ def _argument_type_with_standard_errors(
     return wrapped
 
 
-def _handle_custom_build(args: argparse.Namespace) -> None:
-    """Dispatch the explicit custom-build CLI."""
-
-    custom_build(
-        CustomBuildRequest(
-            target_platform=args.platform,
-            tag_suffix=args.tag_suffix,
-            sst_core_repo=args.core_repo,
-            sst_core_path=args.core_path,
-            sst_core_ref=args.core_ref,
-            sst_elements_repo=args.elements_repo,
-            sst_elements_ref=args.elements_ref,
-            mpich_version=args.mpich_version,
-            build_ncpus=args.build_ncpus,
-            registry=args.registry,
-            enable_perf_tracking=args.enable_perf_tracking,
-            no_cache=args.no_cache,
-            cleanup=args.cleanup,
-            validation_mode=args.validation,
-            container_engine=args.engine,
-            github_actions_mode=args.github_actions_mode,
-        )
-    )
-
-
-def _handle_download_tarballs(args: argparse.Namespace) -> None:
-    """Dispatch the tarball downloader CLI."""
+def _handle_download_sources(args: argparse.Namespace) -> None:
+    """Dispatch the source downloader CLI."""
 
     explicit_download_selection = any(
         [
@@ -95,7 +66,7 @@ def _handle_download_tarballs(args: argparse.Namespace) -> None:
             args.mpich_version is not None,
         ]
     )
-    download_tarballs(
+    download_sources(
         sst_version=args.sst_version or args.sst_version_arg or DEFAULT_SST_VERSION,
         sst_elements_version=args.sst_elements_version,
         mpich_version=args.mpich_version or args.mpich_version_arg or DEFAULT_MPICH_VERSION,
@@ -106,30 +77,14 @@ def _handle_download_tarballs(args: argparse.Namespace) -> None:
     )
 
 
-def _handle_experiment_build(args: argparse.Namespace) -> None:
-    """Dispatch the explicit experiment-build CLI."""
-
-    experiment_build(
-        ExperimentBuildRequest(
-            experiment_name=args.experiment_name,
-            base_image=args.base_image,
-            build_platforms=args.platforms,
-            registry=args.registry,
-            tag_suffix=args.tag_suffix,
-            validation_mode=args.validation,
-            no_cache=args.no_cache,
-            container_engine=args.engine,
-            build_args=tuple(args.build_arg),
-        )
-    )
-
-
 def _handle_local_build(args: argparse.Namespace) -> None:
-    """Dispatch the explicit local-build CLI."""
+    """Dispatch the explicit build CLI."""
+
+    container_type = "custom" if args.container_type == "source" else args.container_type
 
     local_build(
         LocalBuildRequest(
-            container_type=args.container_type,
+            container_type=container_type,
             target_platform=args.platform,
             validation_mode=args.validation,
             registry=args.registry,
@@ -170,7 +125,7 @@ def _add_parser(
 
 
 def _add_local_common_options(parser: argparse.ArgumentParser) -> None:
-    """Add options shared by all local-build subcommands."""
+    """Add options shared by all build subcommands."""
 
     parser.set_defaults(
         sst_version=DEFAULT_SST_VERSION,
@@ -234,7 +189,7 @@ def _add_local_common_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_local_build_resource_options(parser: argparse.ArgumentParser) -> None:
-    """Add local-build options for build resources and dependency versions."""
+    """Add build options for build resources and dependency versions."""
 
     parser.add_argument(
         "--mpich-version",
@@ -255,7 +210,7 @@ def _add_local_release_options(
     *,
     include_elements_version: bool,
 ) -> None:
-    """Add release-style local-build options."""
+    """Add release-style build options."""
 
     parser.add_argument(
         "--sst-version",
@@ -279,7 +234,7 @@ def _add_local_release_options(
 
 
 def _add_local_custom_options(parser: argparse.ArgumentParser) -> None:
-    """Add custom-build-specific options to a local-build subcommand."""
+    """Add source-build-specific options to a build subcommand."""
 
     parser.add_argument(
         "--core-repo",
@@ -321,7 +276,7 @@ def _add_local_custom_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_local_experiment_options(parser: argparse.ArgumentParser) -> None:
-    """Add experiment-build-specific options to a local-build subcommand."""
+    """Add experiment-specific options to a build subcommand."""
 
     parser.add_argument(
         "--experiment-name",
@@ -347,120 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
 
-    custom_build_parser = _add_parser(
-        subparsers,
-        "custom-build",
-        _handle_custom_build,
-        description="Build SST containers from arbitrary repositories and refs.",
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog="""Validation modes:
-  full      Complete validation including runtime checks
-  quick     Fast validation without full runtime coverage
-  metadata  Validate image metadata without executing the container
-  none      Skip validation
-
-Examples:
-  %(prog)s --core-ref main
-  %(prog)s --core-path /path/to/sst-core --tag-suffix local-core
-  %(prog)s --core-ref v15.1.0 --elements-repo https://github.com/custom/sst-elements.git --elements-ref develop
-  %(prog)s --core-ref main --enable-perf-tracking --validation quick""",
-    )
-    required_group = custom_build_parser.add_argument_group("Required options")
-    custom_source_group = required_group.add_mutually_exclusive_group()
-    custom_source_group.add_argument(
-        "--core-path",
-        default="",
-        metavar="PATH",
-        help="Local SST-core checkout to copy into the build context",
-    )
-    custom_source_group.add_argument(
-        "--core-ref",
-        default="",
-        metavar="REF",
-        help="SST-core branch, tag, or commit SHA",
-    )
-    custom_options_group = custom_build_parser.add_argument_group("Options")
-    custom_options_group.add_argument(
-        "--core-repo",
-        default=DEFAULT_SST_CORE_REPO,
-        metavar="URL",
-        help=f"SST-core repository URL (default: {DEFAULT_SST_CORE_REPO})",
-    )
-    custom_options_group.add_argument(
-        "--elements-repo",
-        default="",
-        metavar="URL",
-        help="SST-elements repository URL",
-    )
-    custom_options_group.add_argument(
-        "--elements-ref",
-        default="",
-        metavar="REF",
-        help="SST-elements branch, tag, or commit SHA",
-    )
-    custom_options_group.add_argument(
-        "--mpich-version",
-        default=DEFAULT_MPICH_VERSION,
-        metavar="VERSION",
-        help=f"MPICH version to use (default: {DEFAULT_MPICH_VERSION})",
-    )
-    custom_options_group.add_argument(
-        "--engine",
-        choices=container_engine_choices(),
-        default=None,
-        metavar="ENGINE",
-        help="Container engine to use (docker/podman)",
-    )
-    custom_options_group.add_argument(
-        "--platform",
-        type=_argument_type_with_standard_errors(require_host_platform),
-        default=detect_host_platform(),
-        metavar="PLATFORM",
-        help="Target platform (host platform only; default: auto-detected)",
-    )
-    custom_options_group.add_argument(
-        "--build-ncpus",
-        default=DEFAULT_BUILD_NCPUS,
-        metavar="NUMBER",
-        help=f"Number of CPU cores for build (default: {DEFAULT_BUILD_NCPUS})",
-    )
-    custom_options_group.add_argument(
-        "--registry",
-        default="localhost:5000",
-        metavar="REGISTRY",
-        help="Registry for image tags (default: localhost:5000)",
-    )
-    custom_options_group.add_argument(
-        "--tag-suffix",
-        default="",
-        metavar="SUFFIX",
-        help="Tag suffix for generated image tags",
-    )
-    custom_options_group.add_argument(
-        "--validation",
-        choices=validation_mode_choices(),
-        default="none",
-        metavar="MODE",
-        help="Validation mode: full, quick, metadata, or none (default: none)",
-    )
-    custom_options_group.add_argument(
-        "--enable-perf-tracking",
-        action="store_true",
-        help="Enable SST performance tracking",
-    )
-    custom_options_group.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable build cache",
-    )
-    custom_options_group.add_argument(
-        "--cleanup",
-        action="store_true",
-        help="Remove built images and temporary state after success",
-    )
-    custom_options_group.add_argument("--github-actions-mode", action="store_true", help=argparse.SUPPRESS)
-
-    download_parser = _add_parser(subparsers, "download-tarballs", _handle_download_tarballs)
+    download_parser = _add_parser(subparsers, "download-sources", _handle_download_sources)
     download_parser.add_argument("--sst-version", metavar="VERSION", help="SST-core version to download")
     download_parser.add_argument(
         "--sst-elements-version",
@@ -472,93 +314,19 @@ Examples:
     download_parser.add_argument("sst_version_arg", nargs="?")
     download_parser.add_argument("mpich_version_arg", nargs="?")
 
-    experiment_build_parser = _add_parser(
-        subparsers,
-        "experiment-build",
-        _handle_experiment_build,
-        description="Build experiment containers for SST with optional custom Containerfiles.",
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog="""Validation modes:
-  full      Complete validation including size check and functionality tests
-  quick     Basic validation without execution tests
-  metadata  Validate image metadata without executing the container
-  none      Skip validation entirely
-
-Performance tracking:
-  Experiment containers inherit SST performance tracking from their base image.
-  Use a performance-tracking-enabled base image when you need those capabilities.
-
-Examples:
-  %(prog)s phold-example
-  %(prog)s --base-image sst-core:latest tcl-test-experiment
-  %(prog)s --registry myregistry.io/user --no-cache ahp-graph""",
-    )
-    experiment_build_parser.add_argument(
-        "--base-image",
-        default="sst-core:latest",
-        metavar="IMAGE",
-        help="Base image for experiment builds",
-    )
-    experiment_build_parser.add_argument(
-        "--engine",
-        choices=container_engine_choices(),
-        default=None,
-        metavar="ENGINE",
-        help="Container engine to use (docker/podman)",
-    )
-    experiment_build_parser.add_argument(
-        "--registry",
-        default="localhost:5000",
-        metavar="REGISTRY",
-        help="Registry for image tags (default: localhost:5000)",
-    )
-    experiment_build_parser.add_argument(
-        "--tag-suffix",
-        default="latest",
-        metavar="SUFFIX",
-        help="Tag suffix for generated image tags (default: latest)",
-    )
-    experiment_build_parser.add_argument(
-        "--platforms",
-        type=_argument_type_with_standard_errors(require_single_host_platform),
-        default=detect_host_platform(),
-        metavar="PLATFORMS",
-        help="Build platform (single host platform only; default: auto-detected)",
-    )
-    experiment_build_parser.add_argument("--no-cache", action="store_true", help="Disable build cache")
-    experiment_build_parser.add_argument(
-        "--build-arg",
-        action="append",
-        default=[],
-        metavar="KEY=VALUE",
-        help="Additional build argument (repeatable)",
-    )
-    experiment_build_parser.add_argument(
-        "--validation",
-        choices=validation_mode_choices(),
-        default="full",
-        metavar="MODE",
-        help="Validation mode: full, quick, metadata, or none (default: full)",
-    )
-    experiment_build_parser.add_argument(
-        "experiment_name",
-        metavar="EXPERIMENT_NAME",
-        help="Experiment name (required) - must match existing directory",
-    )
-
     local_build_parser = _add_parser(
         subparsers,
-        "local-build",
+        "build",
         lambda _args: None,
         description=(
-            "Build SST images locally using subcommands for the supported build types."
+            "Build SST images using subcommands for the supported source and image types."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""Container types:
   core        Build SST-core only
   full        Build SST-core + SST-elements
   dev         Build the development image
-  custom      Build from custom repositories and refs
+  source      Build from a local checkout or selected repository/ref
   experiment  Build an experiment container
 
 Examples:
@@ -566,10 +334,10 @@ Examples:
   %(prog)s full --sst-version 15.1.0
   %(prog)s full --sst-version 15.1.2 --elements-version 15.1.0
   %(prog)s core --enable-perf-tracking
-  %(prog)s custom --core-repo https://github.com/sstsimulator/sst-core.git --core-ref main
-  %(prog)s custom --core-path /path/to/sst-core --tag-suffix local-core
+  %(prog)s source --core-repo https://github.com/sstsimulator/sst-core.git --core-ref main
+  %(prog)s source --core-path /path/to/sst-core --tag-suffix local-core
   %(prog)s experiment --experiment-name phold-example
-    %(prog)s core --validation quick""",
+  %(prog)s core --validation quick""",
     )
     local_build_subparsers = local_build_parser.add_subparsers(
         dest="container_type",
@@ -609,10 +377,10 @@ Examples:
 
     local_custom_parser = _add_parser(
         local_build_subparsers,
-        "custom",
+        "source",
         _handle_local_build,
-        help="Build from custom repositories and refs",
-        description="Build a local custom SST image.",
+        help="Build from a local checkout or selected repository/ref",
+        description="Build an SST image from a local checkout or selected repository/ref.",
     )
     _add_local_common_options(local_custom_parser)
     _add_local_custom_options(local_custom_parser)
@@ -622,7 +390,7 @@ Examples:
         "experiment",
         _handle_local_build,
         help="Build an experiment container",
-        description="Build an experiment image through the local-build entry point.",
+        description="Build an experiment image through the build entry point.",
     )
     _add_local_common_options(local_experiment_parser)
     _add_local_experiment_options(local_experiment_parser)
@@ -631,35 +399,35 @@ Examples:
 
     prepare_image_config_parser = _add_parser(
         subparsers,
-        "prepare-image-config",
+        "workflow-prepare-image-config",
         lambda _args: prepare_image_config_from_env(),
     )
     del prepare_image_config_parser
 
     prepare_workflow_build_parser = _add_parser(
         subparsers,
-        "prepare-workflow-build",
+        "workflow-prepare-build",
         lambda _args: prepare_workflow_build_from_env(),
     )
     del prepare_workflow_build_parser
 
     validate_container_parser = _add_parser(
         subparsers,
-        "validate-container",
+        "workflow-validate-container",
         lambda _args: validate_container_from_env(),
     )
     del validate_container_parser
 
     validate_custom_inputs_parser = _add_parser(
         subparsers,
-        "validate-custom-inputs",
-        lambda _args: validate_custom_inputs_from_env(),
+        "workflow-validate-source-inputs",
+        lambda _args: validate_source_inputs_from_env(),
     )
     del validate_custom_inputs_parser
 
     validate_experiment_inputs_parser = _add_parser(
         subparsers,
-        "validate-experiment-inputs",
+        "workflow-validate-experiment-inputs",
         lambda _args: validate_experiment_inputs_from_env(),
     )
     del validate_experiment_inputs_parser
