@@ -44,7 +44,38 @@ class OrchestrationTests(unittest.TestCase):
                 status = cli.main(argv)
         return status, output.getvalue(), errors.getvalue()
 
-    def test_download_tarballs_downloads_requested_artifacts(self) -> None:
+    def _run_shell_wrapper(
+        self,
+        relative_path: str,
+        argv: list[str],
+        *,
+        env_updates: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        """Run a shell wrapper through bash and capture stdout and stderr."""
+
+        env = os.environ.copy()
+        env["PYTHON_BIN"] = sys.executable
+        if env_updates:
+            env.update(env_updates)
+
+        result = subprocess.run(
+            ["bash", str(self.repo_root / relative_path), *argv],
+            cwd=self.repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    def _get_non_host_platform(self) -> str:
+        """Return a single non-host Linux platform for validation tests."""
+
+        if self.host_platform == "linux/amd64":
+            return "linux/arm64"
+        return "linux/amd64"
+
+    def test_download_sources_downloads_requested_artifacts(self) -> None:
         """The Python downloader should fetch the requested tarballs into a target directory."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -65,7 +96,7 @@ class OrchestrationTests(unittest.TestCase):
                 "SST_DOWNLOAD_ELEMENTS_URL": elements_source.resolve().as_uri(),
             }
             with patch.dict(os.environ, env, clear=False):
-                result = orchestration.download_tarballs(
+                result = orchestration.download_sources(
                     sst_version="15.1.2",
                     sst_elements_version="15.1.0",
                     mpich_version="4.0.2",
@@ -91,13 +122,13 @@ class OrchestrationTests(unittest.TestCase):
                 b"sst-elements-source",
             )
 
-    def test_cli_download_tarballs_maps_explicit_selection(self) -> None:
+    def test_cli_download_sources_maps_explicit_selection(self) -> None:
         """The Python CLI should translate downloader options into explicit request flags."""
 
-        with patch.object(cli, "download_tarballs") as download_tarballs:
+        with patch.object(cli, "download_sources") as download_sources:
             status = cli.main(
                 [
-                    "download-tarballs",
+                    "download-sources",
                     "--sst-version",
                     "15.1.2",
                     "--sst-elements-version",
@@ -107,7 +138,7 @@ class OrchestrationTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
-        download_tarballs.assert_called_once_with(
+        download_sources.assert_called_once_with(
             sst_version="15.1.2",
             sst_elements_version="15.1.0",
             mpich_version=orchestration.DEFAULT_MPICH_VERSION,
@@ -117,43 +148,45 @@ class OrchestrationTests(unittest.TestCase):
             force_mode=True,
         )
 
-    def test_cli_experiment_build_dispatches_explicit_request(self) -> None:
-        """The Python CLI should accept explicit experiment-build arguments."""
+    def test_cli_build_experiment_dispatches_explicit_request(self) -> None:
+        """The Python CLI should accept explicit build experiment arguments."""
 
-        with patch.object(cli, "experiment_build") as experiment_build:
+        with patch.object(cli, "build") as build_api:
             status = cli.main(
                 [
-                    "experiment-build",
+                    "build",
+                    "experiment",
                     "--base-image",
                     "sst-core:latest",
-                    "--platforms",
+                    "--platform",
                     self.host_platform,
-                    "--build-arg",
-                    "EXTRA=1",
                     "--validation",
                     "metadata",
                     "--engine",
                     "docker",
+                    "--experiment-name",
                     "phold-example",
                 ]
             )
 
         self.assertEqual(status, 0)
-        request = experiment_build.call_args.args[0]
-        self.assertIsInstance(request, orchestration.ExperimentBuildRequest)
+        request = build_api.call_args.args[0]
+        self.assertIsInstance(request, orchestration.BuildRequest)
+        self.assertEqual(request.container_type, "experiment")
         self.assertEqual(request.experiment_name, "phold-example")
-        self.assertEqual(request.build_platforms, self.host_platform)
-        self.assertEqual(request.build_args, ("EXTRA=1",))
+        self.assertEqual(request.target_platform, self.host_platform)
+        self.assertEqual(request.base_image, "sst-core:latest")
         self.assertEqual(request.validation_mode, "metadata")
         self.assertEqual(request.container_engine, "docker")
 
-    def test_cli_custom_build_dispatches_explicit_request(self) -> None:
-        """The Python CLI should accept explicit custom-build arguments."""
+    def test_cli_build_source_dispatches_explicit_request(self) -> None:
+        """The Python CLI should accept explicit build source arguments."""
 
-        with patch.object(cli, "custom_build") as custom_build:
+        with patch.object(cli, "build") as build_api:
             status = cli.main(
                 [
-                    "custom-build",
+                    "build",
+                    "source",
                     "--core-ref",
                     "main",
                     "--platform",
@@ -169,8 +202,9 @@ class OrchestrationTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
-        request = custom_build.call_args.args[0]
-        self.assertIsInstance(request, orchestration.CustomBuildRequest)
+        request = build_api.call_args.args[0]
+        self.assertIsInstance(request, orchestration.BuildRequest)
+        self.assertEqual(request.container_type, "custom")
         self.assertEqual(request.sst_core_ref, "main")
         self.assertEqual(request.target_platform, self.host_platform)
         self.assertEqual(request.tag_suffix, "demo")
@@ -178,13 +212,13 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(request.enable_perf_tracking)
         self.assertEqual(request.container_engine, "docker")
 
-    def test_cli_local_build_dispatches_explicit_request(self) -> None:
-        """The Python CLI should accept explicit local-build arguments."""
+    def test_cli_build_dispatches_explicit_request(self) -> None:
+        """The Python CLI should accept explicit build arguments."""
 
-        with patch.object(cli, "local_build") as local_build:
+        with patch.object(cli, "build") as build_api:
             status = cli.main(
                 [
-                    "local-build",
+                    "build",
                     "core",
                     "--sst-version",
                     "15.1.2",
@@ -201,8 +235,8 @@ class OrchestrationTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
-        request = local_build.call_args.args[0]
-        self.assertIsInstance(request, orchestration.LocalBuildRequest)
+        request = build_api.call_args.args[0]
+        self.assertIsInstance(request, orchestration.BuildRequest)
         self.assertEqual(request.container_type, "core")
         self.assertEqual(request.target_platform, self.host_platform)
         self.assertEqual(request.sst_version, "15.1.2")
@@ -212,12 +246,13 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(request.cleanup)
         self.assertEqual(request.container_engine, "docker")
 
-    def test_cli_custom_build_rejects_mutually_exclusive_core_source_flags(self) -> None:
-        """The Python CLI should let argparse enforce core source mutual exclusion."""
+    def test_cli_build_source_rejects_mutually_exclusive_core_source_flags(self) -> None:
+        """The Python CLI should let argparse enforce source input mutual exclusion."""
 
         status, _stdout, stderr = self._run_python_cli(
             [
-                "custom-build",
+                "build",
+                "source",
                 "--core-path",
                 "/tmp/sst-core",
                 "--core-ref",
@@ -228,14 +263,16 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("not allowed with argument --core-path", stderr)
 
-    def test_cli_experiment_build_rejects_invalid_validation_mode(self) -> None:
-        """The Python CLI should let argparse choices enforce validation modes."""
+    def test_cli_build_experiment_rejects_invalid_validation_mode(self) -> None:
+        """The Python CLI should let argparse choices enforce build experiment validation modes."""
 
         status, _stdout, stderr = self._run_python_cli(
             [
-                "experiment-build",
+                "build",
+                "experiment",
                 "--validation",
                 "no-exec",
+                "--experiment-name",
                 "phold-example",
             ]
         )
@@ -243,81 +280,156 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("invalid choice: 'no-exec'", stderr)
 
-    def test_cli_experiment_build_requires_experiment_name(self) -> None:
-        """The experiment-build parser should require the experiment name positional."""
+    def test_cli_build_experiment_requires_experiment_name(self) -> None:
+        """The build experiment parser should require the experiment-name option."""
 
-        status, _stdout, stderr = self._run_python_cli(["experiment-build"])
+        status, _stdout, stderr = self._run_python_cli(["build", "experiment"])
 
         self.assertEqual(status, 1)
-        self.assertIn("the following arguments are required: EXPERIMENT_NAME", stderr)
+        self.assertIn("the following arguments are required: --experiment-name", stderr)
 
-    def test_cli_local_build_rejects_invalid_container_type(self) -> None:
-        """The Python CLI should let argparse enforce local-build container choices."""
+    def test_cli_build_rejects_invalid_container_type(self) -> None:
+        """The Python CLI should let argparse enforce build container choices."""
 
-        status, _stdout, stderr = self._run_python_cli(["local-build", "not-a-type"])
+        status, _stdout, stderr = self._run_python_cli(["build", "not-a-type"])
 
         self.assertEqual(status, 1)
         self.assertIn("argument CONTAINER_TYPE: invalid choice: 'not-a-type'", stderr)
 
-    def test_cli_local_build_dev_rejects_perf_tracking_flag(self) -> None:
-        """The dev local-build subparser should reject perf tracking at parse time."""
+    def test_cli_build_dev_rejects_perf_tracking_flag(self) -> None:
+        """The dev build subparser should reject perf tracking at parse time."""
 
         status, _stdout, stderr = self._run_python_cli(
-            ["local-build", "dev", "--enable-perf-tracking"]
+            ["build", "dev", "--enable-perf-tracking"]
         )
 
         self.assertEqual(status, 1)
         self.assertIn("unrecognized arguments: --enable-perf-tracking", stderr)
 
-    def test_cli_custom_build_help_documents_local_checkout_option(self) -> None:
-        """Custom-build help should advertise local checkout support."""
+    def test_cli_build_source_help_documents_local_checkout_option(self) -> None:
+        """Build source help should advertise local checkout support."""
 
-        status, stdout, _stderr = self._run_python_cli(["custom-build", "--help"])
+        status, stdout, _stderr = self._run_python_cli(["build", "source", "--help"])
 
         self.assertEqual(status, 0)
         self.assertIn("--core-path PATH", stdout)
         self.assertNotIn("--sst-core-ref", stdout)
 
-    def test_cli_download_tarballs_help_documents_elements_version(self) -> None:
+    def test_cli_download_sources_help_documents_elements_version(self) -> None:
         """Downloader help should include the SST-elements version option."""
 
-        status, stdout, _stderr = self._run_python_cli(["download-tarballs", "--help"])
+        status, stdout, _stderr = self._run_python_cli(["download-sources", "--help"])
 
         self.assertEqual(status, 0)
         self.assertIn("--sst-elements-version", stdout)
 
-    def test_cli_experiment_build_help_omits_removed_prefix_option(self) -> None:
-        """Experiment-build help should not expose the retired prefix option."""
+    def test_cli_build_experiment_help_omits_removed_prefix_option(self) -> None:
+        """Build experiment help should not expose the retired prefix option."""
 
-        status, stdout, _stderr = self._run_python_cli(["experiment-build", "--help"])
+        status, stdout, _stderr = self._run_python_cli(["build", "experiment", "--help"])
 
         self.assertEqual(status, 0)
         self.assertNotIn("--prefix", stdout)
 
-    def test_cli_local_build_help_lists_custom_subcommand(self) -> None:
-        """Local-build help should list the custom subcommand and omit legacy engine aliases."""
+    def test_cli_build_help_lists_source_subcommand(self) -> None:
+        """Build help should list the source subcommand and omit legacy engine aliases."""
 
-        status, stdout, _stderr = self._run_python_cli(["local-build", "--help"])
+        status, stdout, _stderr = self._run_python_cli(["build", "--help"])
 
         self.assertEqual(status, 0)
-        self.assertIn("custom      Build from custom repositories and refs", stdout)
+        self.assertIn("source", stdout)
+        self.assertIn("Build from a local checkout or selected repository/ref", stdout)
         self.assertNotIn("--docker", stdout)
 
-    def test_cli_local_build_custom_help_documents_perf_tracking(self) -> None:
-        """The local-build custom subcommand help should retain its perf flag."""
+    def test_cli_build_source_help_documents_perf_tracking(self) -> None:
+        """The build source subcommand help should retain its perf flag."""
 
-        status, stdout, _stderr = self._run_python_cli(["local-build", "custom", "--help"])
+        status, stdout, _stderr = self._run_python_cli(["build", "source", "--help"])
 
         self.assertEqual(status, 0)
         self.assertIn("--enable-perf-tracking", stdout)
 
-    def test_cli_local_build_experiment_help_omits_perf_tracking(self) -> None:
-        """The local-build experiment subcommand should not advertise perf tracking."""
+    def test_cli_build_experiment_help_omits_perf_tracking(self) -> None:
+        """The build experiment subcommand should not advertise perf tracking."""
 
-        status, stdout, _stderr = self._run_python_cli(["local-build", "experiment", "--help"])
+        status, stdout, _stderr = self._run_python_cli(["build", "experiment", "--help"])
 
         self.assertEqual(status, 0)
         self.assertNotIn("--enable-perf-tracking", stdout)
+
+    def test_shell_build_wrapper_help_lists_source_subcommand(self) -> None:
+        """The canonical build wrapper should expose the expected top-level help surface."""
+
+        status, stdout, stderr = self._run_shell_wrapper("scripts/build/build.sh", ["--help"])
+
+        self.assertEqual(status, 0, stderr)
+        self.assertIn("source      Build from a local checkout or selected repository/ref", stdout)
+        self.assertNotIn("--docker", stdout)
+        self.assertNotIn("--validate ", stdout)
+
+    def test_shell_build_source_wrapper_help_documents_checkout_and_perf(self) -> None:
+        """The source build wrapper help should expose source-specific options."""
+
+        status, stdout, stderr = self._run_shell_wrapper(
+            "scripts/build/build.sh",
+            ["source", "--help"],
+        )
+
+        self.assertEqual(status, 0, stderr)
+        self.assertIn("--core-path PATH", stdout)
+        self.assertIn("--enable-perf-tracking", stdout)
+        self.assertNotIn("--sst-core-ref", stdout)
+
+    def test_shell_build_wrapper_rejects_invalid_arguments(self) -> None:
+        """The canonical build wrapper should preserve parser-level contract failures."""
+
+        scenarios = [
+            (
+                ["core", "--platforms", "linux/amd64"],
+                "unrecognized arguments: --platforms",
+            ),
+            (
+                ["dev", "--enable-perf-tracking"],
+                "unrecognized arguments: --enable-perf-tracking",
+            ),
+            (
+                ["core", "--validate-only", "--validation", "none"],
+                "--validate-only requires a validation mode other than none",
+            ),
+            (
+                ["not-a-type"],
+                "invalid choice: 'not-a-type'",
+            ),
+        ]
+
+        for argv, expected_error in scenarios:
+            with self.subTest(argv=argv):
+                status, stdout, stderr = self._run_shell_wrapper("scripts/build/build.sh", argv)
+                combined_output = stdout + stderr
+                self.assertEqual(status, 1)
+                self.assertIn(expected_error, combined_output)
+
+    def test_shell_build_wrapper_rejects_non_host_platform(self) -> None:
+        """The canonical build wrapper should keep host-platform enforcement."""
+
+        status, stdout, stderr = self._run_shell_wrapper(
+            "scripts/build/build.sh",
+            ["core", "--platform", self._get_non_host_platform()],
+        )
+
+        self.assertEqual(status, 1)
+        self.assertIn("Cross-platform builds are not supported by this script", stdout + stderr)
+
+    def test_shell_download_wrapper_help_documents_elements_version(self) -> None:
+        """The tarball download wrapper should expose the SST-elements version option."""
+
+        status, stdout, stderr = self._run_shell_wrapper(
+            "scripts/build/download-sources.sh",
+            ["--help"],
+        )
+
+        self.assertEqual(status, 0, stderr)
+        self.assertIn("--sst-elements-version", stdout)
 
     def test_prepare_image_config_generates_expected_outputs(self) -> None:
         """Prepare-image-config should compute the expected patterns."""
@@ -357,7 +469,7 @@ class OrchestrationTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=False):
             with self.assertRaises(ValueError):
-                adapters.validate_custom_inputs_from_env()
+                adapters.validate_source_inputs_from_env()
 
     def test_validate_experiment_inputs_detects_containerfile(self) -> None:
         """Experiment validation should accept directories with a custom Containerfile."""
@@ -446,6 +558,53 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(result.image_tag, env["IMAGE_TAG"])
         self.assertEqual(result.platform, env["PLATFORM"])
         self.assertEqual(result.image_size_mb, 512)
+
+    def test_full_build_validation_uses_local_image_without_pull(self) -> None:
+        """Build-path full validation should validate the local image without re-pulling it."""
+
+        inspect_result = subprocess.CompletedProcess(
+            args=["docker", "image", "inspect"],
+            returncode=0,
+            stdout=str(512 * 1024 * 1024),
+        )
+        create_result = subprocess.CompletedProcess(
+            args=["docker", "create"],
+            returncode=0,
+            stdout="container-123\n",
+        )
+        rm_result = subprocess.CompletedProcess(args=["docker", "rm"], returncode=0)
+        seen_commands: list[list[str]] = []
+
+        def fake_run_command(
+            command: list[str],
+            *,
+            capture_output: bool = False,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            del capture_output, cwd, env
+            seen_commands.append(command)
+            if command[:3] == ["docker", "image", "inspect"]:
+                return inspect_result
+            if command[:2] == ["docker", "create"]:
+                return create_result
+            if command[:2] == ["docker", "rm"]:
+                return rm_result
+            self.fail(f"Unexpected command: {command}")
+
+        with patch.object(orchestration, "_run_command", side_effect=fake_run_command):
+            image_size_mb = orchestration._run_image_validation(
+                "full",
+                container_engine="docker",
+                image_tag=f"localhost:5000/sst-core:15.1.2-{self.host_arch}",
+                target_platform=self.host_platform,
+                max_size_mb=2048,
+                return_image_size=True,
+                pull_image=False,
+            )
+
+        self.assertEqual(image_size_mb, 512)
+        self.assertFalse(any(command[:2] == ["docker", "pull"] for command in seen_commands))
 
     def test_metadata_validate_image_skips_runtime_env_warning_for_dev_profile(self) -> None:
         """Development-image metadata validation should not warn about missing SST runtime env vars."""
@@ -567,8 +726,8 @@ class OrchestrationTests(unittest.TestCase):
             f"ghcr.io/hpc-ai-adv-dev/phold-example:latest-{self.host_arch}",
         )
 
-    def test_custom_build_from_env_metadata_validation_uses_image_inspect(self) -> None:
-        """Custom builds should validate the built image through Python metadata inspection."""
+    def test_source_build_from_env_metadata_validation_uses_image_inspect(self) -> None:
+        """Source builds should validate the built image through Python metadata inspection."""
 
         env = {
             "BUILD_TYPE": "core-build",
@@ -610,7 +769,7 @@ class OrchestrationTests(unittest.TestCase):
                     "_run_command",
                     side_effect=[build_result, inspect_result, inspect_result],
                 ):
-                    result = adapters.custom_build_from_env()
+                    result = adapters.source_build_from_env()
 
         self.assertEqual(result.build_type, "core-build")
         self.assertEqual(result.image_size_mb, 256)
@@ -619,10 +778,10 @@ class OrchestrationTests(unittest.TestCase):
             f"ghcr.io/hpc-ai-adv-dev/sst-custom:main-{self.host_arch}",
         )
 
-    def test_custom_build_accepts_explicit_request(self) -> None:
-        """Custom builds should be callable without routing through environment variables."""
+    def test_source_build_accepts_explicit_request(self) -> None:
+        """Source builds should be callable without routing through environment variables."""
 
-        request = orchestration.CustomBuildRequest(
+        request = orchestration.SourceBuildRequest(
             sst_core_ref="main",
             target_platform=self.host_platform,
             registry="ghcr.io/hpc-ai-adv-dev",
@@ -652,7 +811,7 @@ class OrchestrationTests(unittest.TestCase):
                 "_run_command",
                 side_effect=[build_result, inspect_result, inspect_result],
             ):
-                result = orchestration.custom_build(request)
+                result = orchestration.source_build(request)
 
         self.assertEqual(result.build_type, "core-build")
         self.assertEqual(
@@ -660,10 +819,10 @@ class OrchestrationTests(unittest.TestCase):
             f"ghcr.io/hpc-ai-adv-dev/sst-custom:main-{self.host_arch}",
         )
 
-    def test_local_build_custom_delegates_tag_suffix_derivation(self) -> None:
-        """Local custom builds should rely on canonical custom-build normalization for defaults."""
+    def test_build_custom_delegates_tag_suffix_derivation(self) -> None:
+        """Local source-backed builds should rely on canonical source-build normalization for defaults."""
 
-        request = orchestration.LocalBuildRequest(
+        request = orchestration.BuildRequest(
             container_type="custom",
             target_platform=self.host_platform,
             validation_mode="metadata",
@@ -673,31 +832,31 @@ class OrchestrationTests(unittest.TestCase):
             sst_core_ref="main",
             container_engine="docker",
         )
-        custom_result = orchestration.CustomBuildResult(
+        source_result = orchestration.SourceBuildResult(
             image_tag=f"ghcr.io/hpc-ai-adv-dev/sst-custom:main-{self.host_arch}",
             build_type="core-build",
             image_size_mb=256,
         )
 
         with patch.object(orchestration, "detect_container_engine", return_value="docker"):
-            with patch.object(orchestration, "_download_local_build_sources"):
-                with patch.object(orchestration, "custom_build", return_value=custom_result) as custom_build:
+            with patch.object(orchestration, "_download_build_sources"):
+                with patch.object(orchestration, "source_build", return_value=source_result) as source_build:
                     with patch.object(orchestration, "_write_last_built_image"):
                         with patch.object(
                             orchestration,
-                            "_validate_local_build_image",
+                            "_validate_build_image",
                             return_value=256,
                         ):
-                            result = orchestration.local_build(request)
+                            result = orchestration.build(request)
 
-        delegated_request = custom_build.call_args.args[0]
+        delegated_request = source_build.call_args.args[0]
         self.assertEqual(delegated_request.tag_suffix, "")
         self.assertEqual(delegated_request.sst_core_ref, "main")
-        self.assertEqual(result.image_tag, custom_result.image_tag)
+        self.assertEqual(result.image_tag, source_result.image_tag)
         self.assertEqual(result.image_size_mb, 256)
 
-    def test_local_build_from_env_builds_dev_image_with_metadata_validation(self) -> None:
-        """Local-build should download, build, and validate dev images through Python."""
+    def test_build_from_env_builds_dev_image_with_metadata_validation(self) -> None:
+        """Build should download, build, and validate dev images through Python."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
@@ -706,7 +865,7 @@ class OrchestrationTests(unittest.TestCase):
                 "FROM ubuntu:22.04\n",
                 encoding="utf-8",
             )
-            download_script = repo_root / "scripts" / "build" / "download_tarballs.sh"
+            download_script = repo_root / "scripts" / "build" / "download-sources.sh"
             download_script.parent.mkdir(parents=True)
             download_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             download_script.chmod(download_script.stat().st_mode | stat.S_IXUSR)
@@ -753,7 +912,7 @@ class OrchestrationTests(unittest.TestCase):
                             "_run_command",
                             side_effect=[download_result, build_result, inspect_result, inspect_result],
                         ):
-                            result = adapters.local_build_from_env()
+                            result = adapters.build_from_env()
 
         self.assertEqual(result.container_type, "dev")
         self.assertEqual(
@@ -762,8 +921,8 @@ class OrchestrationTests(unittest.TestCase):
         )
         self.assertEqual(result.image_size_mb, 256)
 
-    def test_local_build_accepts_explicit_request(self) -> None:
-        """Local-build should be callable without routing through environment variables."""
+    def test_build_accepts_explicit_request(self) -> None:
+        """Build should be callable without routing through environment variables."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
@@ -772,12 +931,12 @@ class OrchestrationTests(unittest.TestCase):
                 "FROM ubuntu:22.04\n",
                 encoding="utf-8",
             )
-            download_script = repo_root / "scripts" / "build" / "download_tarballs.sh"
+            download_script = repo_root / "scripts" / "build" / "download-sources.sh"
             download_script.parent.mkdir(parents=True)
             download_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             download_script.chmod(download_script.stat().st_mode | stat.S_IXUSR)
 
-            request = orchestration.LocalBuildRequest(
+            request = orchestration.BuildRequest(
                 container_type="dev",
                 target_platform=self.host_platform,
                 validation_mode="metadata",
@@ -815,7 +974,7 @@ class OrchestrationTests(unittest.TestCase):
                         "_run_command",
                         side_effect=[download_result, build_result, inspect_result, inspect_result],
                     ):
-                        result = orchestration.local_build(request)
+                        result = orchestration.build(request)
 
         self.assertEqual(result.container_type, "dev")
         self.assertEqual(
@@ -824,10 +983,10 @@ class OrchestrationTests(unittest.TestCase):
         )
         self.assertEqual(result.image_size_mb, 256)
 
-    def test_plan_standard_local_build_spec_captures_release_inputs(self) -> None:
+    def test_plan_build_spec_captures_release_inputs(self) -> None:
         """Standard local builds should produce a reusable build spec."""
 
-        request = orchestration.LocalBuildRequest(
+        request = orchestration.BuildRequest(
             container_type="full",
             target_platform=self.host_platform,
             registry="ghcr.io/hpc-ai-adv-dev",
@@ -841,7 +1000,7 @@ class OrchestrationTests(unittest.TestCase):
             validation_mode="metadata",
         )
 
-        spec = orchestration.plan_local_build_spec(request)
+        spec = orchestration.plan_build_spec(request)
 
         self.assertIsInstance(spec, build_spec.BuildSpec)
         self.assertEqual(spec.build_kind, "local")
@@ -863,8 +1022,8 @@ class OrchestrationTests(unittest.TestCase):
             f"ghcr.io/hpc-ai-adv-dev/sst-perf-track-full:15.1.2-{self.host_arch}",
         )
 
-    def test_plan_custom_build_spec_captures_full_build_from_local_checkout(self) -> None:
-        """Custom build planning should encode repository sources and build arguments."""
+    def test_plan_source_build_spec_captures_full_build_from_local_checkout(self) -> None:
+        """Source build planning should encode repository sources and build arguments."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
             source_dir = Path(temp_dir) / "sst-core"
@@ -872,7 +1031,7 @@ class OrchestrationTests(unittest.TestCase):
             (source_dir / "autogen.sh").write_text("#!/bin/sh\n", encoding="utf-8")
             (source_dir / "configure.ac").write_text("AC_INIT([sst-core],[test])\n", encoding="utf-8")
 
-            request = orchestration.CustomBuildRequest(
+            request = orchestration.SourceBuildRequest(
                 target_platform=self.host_platform,
                 tag_suffix="local-main-full",
                 sst_core_path=str(source_dir),
@@ -883,7 +1042,7 @@ class OrchestrationTests(unittest.TestCase):
                 registry="ghcr.io/hpc-ai-adv-dev",
             )
 
-            spec = orchestration.plan_custom_build_spec(request)
+            spec = orchestration.plan_source_build_spec(request)
 
         self.assertEqual(spec.build_kind, "custom")
         self.assertEqual(spec.source.source_kind, "local-checkout")
