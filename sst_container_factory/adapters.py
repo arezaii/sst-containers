@@ -436,6 +436,7 @@ def validate_container_from_env(env: Mapping[str, str] | None = None) -> Validat
             image_tag,
             target_platform,
             max_size_mb,
+            pull_image=True,
         )
 
     image_size_mb = orchestration_module._run_image_validation(

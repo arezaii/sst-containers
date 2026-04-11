@@ -2343,6 +2343,8 @@ def _validate_container(
     image_tag: str,
     target_platform: str,
     max_size_mb: int,
+    *,
+    pull_image: bool = True,
 ) -> ValidateContainerResult:
     """Validate a pulled container image using explicit parameters."""
 
@@ -2352,11 +2354,14 @@ def _validate_container(
     log_info(f"Max size: {max_size_mb} MB")
     log_info(f"Engine:   {container_engine}")
 
-    log_info("Pulling image...")
-    pull_result = _run_command([container_engine, "pull", image_tag])
-    if pull_result.returncode != 0:
-        end_group()
-        raise OrchestrationError(f"Failed to pull image: {image_tag}")
+    if pull_image:
+        log_info("Pulling image...")
+        pull_result = _run_command([container_engine, "pull", image_tag])
+        if pull_result.returncode != 0:
+            end_group()
+            raise OrchestrationError(f"Failed to pull image: {image_tag}")
+    else:
+        log_info("Using locally available image...")
 
     inspect_result = _run_command(
         [container_engine, "image", "inspect", image_tag, "--format={{.Size}}"],
@@ -2571,6 +2576,7 @@ def _run_image_validation(
     metadata_success_message: str = "Metadata-only container validation passed",
     full_success_message: str = "Container validation passed",
     return_image_size: bool = False,
+    pull_image: bool = False,
 ) -> int | None:
     """Run one of the supported validation modes and optionally return image size."""
 
@@ -2605,7 +2611,13 @@ def _run_image_validation(
             return None
 
         if validation_mode == "full":
-            result = _validate_container(container_engine, image_tag, target_platform, max_size_mb)
+            result = _validate_container(
+                container_engine,
+                image_tag,
+                target_platform,
+                max_size_mb,
+                pull_image=pull_image,
+            )
             log_success(full_success_message)
             if return_image_size:
                 return result.image_size_mb
