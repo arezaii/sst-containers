@@ -8,8 +8,8 @@ on:
       - '.github/workflows/workflow-bake-smoke.yml'
       - 'sst_container_factory/**'
       - 'Containerfiles/**'
-      - 'ahp-graph/**'
-      - 'phold-example/**'
+      - 'experiments/ahp-graph/**'
+      - 'experiments/phold-example/**'
 
 jobs:
   smoke-bake-boundary:
