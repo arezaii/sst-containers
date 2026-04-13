@@ -5,7 +5,7 @@ This experiment pulls and builds the PHOLD benchmark from the sst-benchmarks rep
 ## Directory Structure
 
 ```
-phold-example/
+experiments/phold-example/
 |-- README.md           # This file
 |-- run_simulation.sh   # Script to pull and build PHOLD benchmark
 `-- analyze_results.sh  # Post-processing script
@@ -43,7 +43,7 @@ cd /experiments/phold-example
 2. Click "Run workflow"
 3. Fill in the parameters:
    - **experiment_name**: `phold-example`
-   - **base_image**: e.g., `ar-sst-core:latest` or `ghcr.io/hpc-ai-adv-dev/ar-sst-full:15.1.0`
+   - **base_image**: e.g., `sst-core:latest` or `ghcr.io/hpc-ai-adv-dev/sst-full:15.1.0`
    - **build_platforms**: e.g., `linux/amd64` or `linux/amd64,linux/arm64`
    - **tag_suffix**: `latest` (or any custom tag)
 4. Click "Run workflow"

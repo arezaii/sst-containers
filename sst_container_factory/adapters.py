@@ -348,7 +348,7 @@ def validate_experiment_inputs_from_env(env: Mapping[str, str] | None = None) ->
     start_group("Validate Experiment Inputs")
     log_info(f"Experiment name: {experiment_name}")
 
-    experiment_dir = orchestration_module.REPO_ROOT / experiment_name
+    experiment_dir = orchestration_module.experiment_directory(experiment_name)
     if not experiment_dir.is_dir():
         log_error(f"Experiment directory '{experiment_name}' does not exist")
         set_output("experiment_exists", "false")

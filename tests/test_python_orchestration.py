@@ -360,7 +360,7 @@ class OrchestrationTests(unittest.TestCase):
     def test_shell_build_wrapper_help_lists_source_subcommand(self) -> None:
         """The canonical build wrapper should expose the expected top-level help surface."""
 
-        status, stdout, stderr = self._run_shell_wrapper("scripts/build/build.sh", ["--help"])
+        status, stdout, stderr = self._run_shell_wrapper("sst_container_factory/bin/build.sh", ["--help"])
 
         self.assertEqual(status, 0, stderr)
         self.assertIn("source      Build from a local checkout or selected repository/ref", stdout)
@@ -371,7 +371,7 @@ class OrchestrationTests(unittest.TestCase):
         """The source build wrapper help should expose source-specific options."""
 
         status, stdout, stderr = self._run_shell_wrapper(
-            "scripts/build/build.sh",
+            "sst_container_factory/bin/build.sh",
             ["source", "--help"],
         )
 
@@ -404,7 +404,7 @@ class OrchestrationTests(unittest.TestCase):
 
         for argv, expected_error in scenarios:
             with self.subTest(argv=argv):
-                status, stdout, stderr = self._run_shell_wrapper("scripts/build/build.sh", argv)
+                status, stdout, stderr = self._run_shell_wrapper("sst_container_factory/bin/build.sh", argv)
                 combined_output = stdout + stderr
                 self.assertEqual(status, 1)
                 self.assertIn(expected_error, combined_output)
@@ -413,7 +413,7 @@ class OrchestrationTests(unittest.TestCase):
         """The canonical build wrapper should keep host-platform enforcement."""
 
         status, stdout, stderr = self._run_shell_wrapper(
-            "scripts/build/build.sh",
+            "sst_container_factory/bin/build.sh",
             ["core", "--platform", self._get_non_host_platform()],
         )
 
@@ -424,7 +424,7 @@ class OrchestrationTests(unittest.TestCase):
         """The tarball download wrapper should expose the SST-elements version option."""
 
         status, stdout, stderr = self._run_shell_wrapper(
-            "scripts/build/download-sources.sh",
+            "sst_container_factory/bin/download-sources.sh",
             ["--help"],
         )
 
@@ -476,8 +476,8 @@ class OrchestrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
-            experiment_dir = repo_root / "demo-experiment"
-            experiment_dir.mkdir()
+            experiment_dir = repo_root / "experiments" / "demo-experiment"
+            experiment_dir.mkdir(parents=True)
             (experiment_dir / "Containerfile").write_text("FROM ubuntu:24.04\n", encoding="utf-8")
             (experiment_dir / "README.md").write_text("demo\n", encoding="utf-8")
 
@@ -501,8 +501,8 @@ class OrchestrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
-            experiment_dir = repo_root / "demo-experiment"
-            experiment_dir.mkdir()
+            experiment_dir = repo_root / "experiments" / "demo-experiment"
+            experiment_dir.mkdir(parents=True)
             (experiment_dir / "run.sh").write_text("echo demo\n", encoding="utf-8")
 
             env = {
@@ -651,8 +651,11 @@ class OrchestrationTests(unittest.TestCase):
                     result = adapters.experiment_build_from_env()
 
         self.assertEqual(result.containerfile_type, "custom")
-        self.assertEqual(result.containerfile_path, str(self.repo_root / "ahp-graph" / "Containerfile"))
-        self.assertEqual(result.docker_context, str(self.repo_root / "ahp-graph"))
+        self.assertEqual(
+            result.containerfile_path,
+            str(self.repo_root / "experiments" / "ahp-graph" / "Containerfile"),
+        )
+        self.assertEqual(result.docker_context, str(self.repo_root / "experiments" / "ahp-graph"))
         self.assertEqual(
             result.image_tag,
             f"ghcr.io/hpc-ai-adv-dev/ahp-graph:latest-{self.host_arch}",
@@ -1494,7 +1497,7 @@ class OrchestrationTests(unittest.TestCase):
         target_definitions = cast(dict[str, dict[str, object]], bake_plan.definition["target"])
         amd64_target = target_definitions["experiment-amd64"]
 
-        self.assertEqual(amd64_target["context"], "phold-example")
+        self.assertEqual(amd64_target["context"], "experiments/phold-example")
         self.assertEqual(
             amd64_target["dockerfile"],
             str(self.repo_root / "Containerfiles" / "Containerfile.experiment"),

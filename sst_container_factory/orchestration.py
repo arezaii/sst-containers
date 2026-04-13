@@ -70,6 +70,18 @@ LOCAL_SST_CORE_CONTEXT_NAME = "sst_core_input"
 LOCAL_SST_CORE_SOURCE_STAGE_ARG = "SST_CORE_SOURCE_STAGE=sst-core-local-source"
 
 
+def experiment_directory(experiment_name: str) -> Path:
+    """Return the repository path for an experiment."""
+
+    return REPO_ROOT / "experiments" / experiment_name
+
+
+def experiment_repo_path(experiment_name: str) -> str:
+    """Return the repository-relative path for an experiment."""
+
+    return (Path("experiments") / experiment_name).as_posix()
+
+
 class OrchestrationError(RuntimeError):
     """Raised when orchestration runtime operations fail."""
 
@@ -1203,7 +1215,7 @@ def plan_workflow_build_spec(
         )
 
     if normalized_request.container_type == "experiment":
-        experiment_dir = REPO_ROOT / normalized_request.experiment_name
+        experiment_dir = experiment_directory(normalized_request.experiment_name)
         if not experiment_dir.is_dir():
             raise OrchestrationError(
                 f"Experiment directory '{normalized_request.experiment_name}' not found"
@@ -1212,9 +1224,10 @@ def plan_workflow_build_spec(
         has_custom_containerfile = (experiment_dir / "Containerfile").is_file()
         build_args = []
         resolved_base_image = ""
+        experiment_path = experiment_repo_path(normalized_request.experiment_name)
         if has_custom_containerfile:
-            containerfile_path = f"{normalized_request.experiment_name}/Containerfile"
-            docker_context = normalized_request.experiment_name
+            containerfile_path = f"{experiment_path}/Containerfile"
+            docker_context = experiment_path
             source_kind = "experiment-custom-containerfile"
         else:
             repo_owner = normalized_request.image_prefix.split("/", 1)[0]
@@ -1232,7 +1245,7 @@ def plan_workflow_build_spec(
                     )
             build_args.append(f"BASE_IMAGE={resolved_base_image}")
             containerfile_path = "Containerfiles/Containerfile.experiment"
-            docker_context = normalized_request.experiment_name
+            docker_context = experiment_path
             source_kind = "experiment-template"
 
         platform_builds = _workflow_platform_builds(
@@ -1953,7 +1966,7 @@ def _plan_experiment_build_spec(
 ) -> BuildSpec:
     """Create the shared build spec for an experiment build request."""
 
-    experiment_dir = REPO_ROOT / normalized_request.experiment_name
+    experiment_dir = experiment_directory(normalized_request.experiment_name)
     if not experiment_dir.is_dir():
         raise OrchestrationError(
             f"Experiment directory '{normalized_request.experiment_name}' not found"
