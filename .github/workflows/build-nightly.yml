@@ -94,9 +94,7 @@ jobs:
       mpich_version: ${{ inputs.mpich_version || '4.0.2' }}
       sst_core_repo: 'https://github.com/sstsimulator/sst-core.git'
       sst_core_ref: '${{ needs.check-updates.outputs.current_sha }}'
-      containerfile_path: 'Containerfiles/Containerfile.tag'
-      docker_context: 'Containerfiles'
-      build_target: 'core-build'
+      publish_master_latest: true
     secrets: inherit
 
 
@@ -112,45 +110,13 @@ jobs:
       container_type: 'core'
       image_tags: '${{ needs.build-core-containers.outputs.built_images }}'
       build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
-      max_image_size_mb: 4096
+      max_image_size_mb: ${{ fromJson(needs.build-core-containers.outputs.max_image_size_mb) }}
+      validation_mode: '${{ needs.build-core-containers.outputs.validation_mode }}'
     secrets: inherit
-
-
-
-  create-additional-tags:
-    needs: [check-updates, build-core-containers]
-    if: needs.build-core-containers.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create master-latest tag
-        run: |
-          TAG_SUFFIX="${{ needs.check-updates.outputs.tag_suffix }}"
-          SOURCE_TAG="ghcr.io/${{ github.repository_owner }}/sst-core:${TAG_SUFFIX}"
-
-          echo "Creating master-latest tag for core container from: ${SOURCE_TAG}"
-
-          docker buildx imagetools create \
-            --tag "ghcr.io/${{ github.repository_owner }}/sst-core:master-latest" \
-            ${SOURCE_TAG}
-
-          echo "Created core additional tag: master-latest"
 
   generate-summary:
     uses: ./.github/workflows/_reusable-generate-summary.yml
-    needs: [check-updates, build-core-containers, validate-core-containers, create-additional-tags]
+    needs: [check-updates, build-core-containers, validate-core-containers]
     if: always()
     with:
       workflow_type: 'nightly'
@@ -161,6 +127,7 @@ jobs:
       manifest_tag: '${{ needs.build-core-containers.outputs.manifest_tag }}'
       built_images: '${{ needs.build-core-containers.outputs.built_images }}'
       build_platforms: ${{ inputs.build_platforms || 'linux/amd64,linux/arm64' }}
-      tag_suffix: '${{ needs.check-updates.outputs.tag_suffix }}'
+      tag_suffix: '${{ needs.build-core-containers.outputs.resolved_tag_suffix }}'
+      alias_tags_json: '${{ needs.build-core-containers.outputs.alias_tags_json }}'
       mpich_version: ${{ inputs.mpich_version || '4.0.2' }}
       sst_commit: '${{ needs.check-updates.outputs.current_sha }}'

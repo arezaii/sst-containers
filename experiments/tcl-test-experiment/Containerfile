@@ -10,8 +10,8 @@
 # - All SST core and elements installations
 #
 # BUILD ARGUMENTS:
-#   SST_14_IMAGE: SST 14.1.0 full image (default: ghcr.io/ai-hpc-adv-dev/sst-full:14.1.0)
-#   SST_15_IMAGE: SST 15.0.0 full image (default: ghcr.io/ai-hpc-adv-dev/sst-full:15.0.0)
+#   SST_14_IMAGE: SST 14.1.0 full image (default: ghcr.io/hpc-ai-adv-dev/sst-full:14.1.0)
+#   SST_15_IMAGE: SST 15.0.0 full image (default: ghcr.io/hpc-ai-adv-dev/sst-full:15.0.0)
 #
 # RUNTIME ENVIRONMENT VARIABLES:
 #   SST_VERSION: Choose SST version at runtime (14.1.0 or 15.0.0, default: 15.0.0)
@@ -29,8 +29,8 @@
 
 # Build arguments for specifying which SST images to use
 # Using sst-full images that include both SST core and SST elements
-ARG SST_14_IMAGE=ghcr.io/ai-hpc-adv-dev/sst-full:14.1.0
-ARG SST_15_IMAGE=ghcr.io/ai-hpc-adv-dev/sst-full:15.0.0
+ARG SST_14_IMAGE=ghcr.io/hpc-ai-adv-dev/sst-full:14.1.0
+ARG SST_15_IMAGE=ghcr.io/hpc-ai-adv-dev/sst-full:15.0.0
 
 # --- Extract SST 14.1.0 from existing image ---
 FROM ${SST_14_IMAGE} AS sst-14-extract

@@ -51,8 +51,6 @@ jobs:
       tag_suffix: '${{ inputs.tag_suffix }}'
       build_platforms: '${{ inputs.build_platforms }}'
       mpich_version: '${{ inputs.mpich_version }}'
-      containerfile_path: 'Containerfiles/Containerfile.dev'
-      docker_context: 'Containerfiles'
       force_rebuild: ${{ inputs.force_rebuild }}
       ignore_cache: ${{ inputs.ignore_cache }}
     secrets: inherit
@@ -67,7 +65,8 @@ jobs:
       container_type: 'dev'
       image_tags: '${{ needs.build-dev-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      max_image_size_mb: 4096
+      max_image_size_mb: ${{ fromJson(needs.build-dev-containers.outputs.max_image_size_mb) }}
+      validation_mode: '${{ needs.build-dev-containers.outputs.validation_mode }}'
     secrets: inherit
 
   generate-summary:
@@ -85,5 +84,6 @@ jobs:
       manifest_tag: '${{ needs.build-dev-containers.outputs.manifest_tag }}'
       built_images: '${{ needs.build-dev-containers.outputs.built_images }}'
       build_platforms: '${{ inputs.build_platforms }}'
-      tag_suffix: '${{ inputs.tag_suffix }}'
+      tag_suffix: '${{ needs.build-dev-containers.outputs.resolved_tag_suffix }}'
+      alias_tags_json: '${{ needs.build-dev-containers.outputs.alias_tags_json }}'
       mpich_version: '${{ inputs.mpich_version }}'

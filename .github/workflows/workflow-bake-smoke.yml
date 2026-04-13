@@ -1,0 +1,190 @@
+name: Workflow Bake Smoke Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/_reusable-build-containers.yml'
+      - '.github/workflows/workflow-bake-smoke.yml'
+      - 'sst_container_factory/**'
+      - 'Containerfiles/**'
+      - 'experiments/ahp-graph/**'
+      - 'experiments/phold-example/**'
+
+jobs:
+  smoke-bake-boundary:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: release-full
+            container_type: full
+            image_prefix_mode: repository
+            image_name: sst
+            build_platforms: linux/amd64
+            tag_suffix: 15.1.2
+            sst_version: 15.1.2
+            sst_elements_version: 15.1.0
+            mpich_version: 4.0.2
+            enable_perf_tracking: 'true'
+            sst_core_repo: ''
+            sst_core_ref: ''
+            sst_elements_repo: ''
+            sst_elements_ref: ''
+            experiment_name: ''
+            base_image: ''
+          - name: custom-core
+            container_type: custom
+            image_prefix_mode: repository
+            image_name: sst-devel
+            build_platforms: linux/amd64
+            tag_suffix: ''
+            sst_version: ''
+            sst_elements_version: ''
+            mpich_version: 4.0.2
+            enable_perf_tracking: 'false'
+            sst_core_repo: https://github.com/sstsimulator/sst-core.git
+            sst_core_ref: main
+            sst_elements_repo: ''
+            sst_elements_ref: ''
+            experiment_name: ''
+            base_image: ''
+          - name: experiment-template
+            container_type: experiment
+            image_prefix_mode: owner
+            image_name: ''
+            build_platforms: linux/amd64
+            tag_suffix: latest
+            sst_version: ''
+            sst_elements_version: ''
+            mpich_version: 4.0.2
+            enable_perf_tracking: 'false'
+            sst_core_repo: ''
+            sst_core_ref: ''
+            sst_elements_repo: ''
+            sst_elements_ref: ''
+            experiment_name: phold-example
+            base_image: sst-core:latest
+          - name: experiment-custom-containerfile
+            container_type: experiment
+            image_prefix_mode: owner
+            image_name: ''
+            build_platforms: linux/amd64
+            tag_suffix: latest
+            sst_version: ''
+            sst_elements_version: ''
+            mpich_version: 4.0.2
+            enable_perf_tracking: 'false'
+            sst_core_repo: ''
+            sst_core_ref: ''
+            sst_elements_repo: ''
+            sst_elements_ref: ''
+            experiment_name: ahp-graph
+            base_image: sst-core:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve scenario inputs
+        run: |
+          if [[ "${{ matrix.image_prefix_mode }}" == "owner" ]]; then
+            echo "IMAGE_PREFIX=${GITHUB_REPOSITORY_OWNER}" >> "$GITHUB_ENV"
+          else
+            echo "IMAGE_PREFIX=${GITHUB_REPOSITORY_OWNER}/${{ matrix.image_name }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Prepare workflow build plan
+        id: plan
+        env:
+          CONTAINER_TYPE: ${{ matrix.container_type }}
+          IMAGE_PREFIX: ${{ env.IMAGE_PREFIX }}
+          BUILD_PLATFORMS: ${{ matrix.build_platforms }}
+          TAG_SUFFIX: ${{ matrix.tag_suffix }}
+          REGISTRY: ghcr.io
+          SST_VERSION: ${{ matrix.sst_version }}
+          SST_ELEMENTS_VERSION: ${{ matrix.sst_elements_version }}
+          MPICH_VERSION: ${{ matrix.mpich_version }}
+          BUILD_NCPUS: '2'
+          SST_CORE_REPO: ${{ matrix.sst_core_repo }}
+          SST_CORE_REF: ${{ matrix.sst_core_ref }}
+          SST_ELEMENTS_REPO: ${{ matrix.sst_elements_repo }}
+          SST_ELEMENTS_REF: ${{ matrix.sst_elements_ref }}
+          ENABLE_PERF_TRACKING: ${{ matrix.enable_perf_tracking }}
+          EXPERIMENT_NAME: ${{ matrix.experiment_name }}
+          BASE_IMAGE: ${{ matrix.base_image }}
+          IGNORE_CACHE: 'false'
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_WORKFLOW: ${{ github.workflow }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m sst_container_factory.cli workflow-prepare-build
+
+      - name: Write Buildx bake definition
+        env:
+          BAKE_DEFINITION_JSON: ${{ steps.plan.outputs.bake_definition_json }}
+        run: |
+          printf '%s\n' "$BAKE_DEFINITION_JSON" > docker-bake.json
+          jq . docker-bake.json
+
+      - name: Validate emitted bake target paths
+        env:
+          PLATFORM_MATRIX_JSON: ${{ steps.plan.outputs.platform_matrix }}
+        run: |
+          TARGET_COUNT=$(jq -r '.include | length' <<<"$PLATFORM_MATRIX_JSON")
+          if [[ "$TARGET_COUNT" != "1" ]]; then
+            echo "Expected exactly one smoke target, got: $TARGET_COUNT"
+            exit 1
+          fi
+
+          BAKE_TARGET=$(jq -r '.include[0].bake_target' <<<"$PLATFORM_MATRIX_JSON")
+          CONTEXT_PATH=$(jq -r --arg target "$BAKE_TARGET" '.target[$target].context' docker-bake.json)
+          DOCKERFILE_PATH=$(jq -r --arg target "$BAKE_TARGET" '.target[$target].dockerfile' docker-bake.json)
+
+          if [[ ! -d "$CONTEXT_PATH" ]]; then
+            echo "Bake context does not exist: $CONTEXT_PATH"
+            exit 1
+          fi
+
+          if [[ "$DOCKERFILE_PATH" = /* ]]; then
+            RESOLVED_DOCKERFILE="$DOCKERFILE_PATH"
+          else
+            RESOLVED_DOCKERFILE="$CONTEXT_PATH/$DOCKERFILE_PATH"
+          fi
+
+          if [[ ! -f "$RESOLVED_DOCKERFILE" ]]; then
+            echo "Bake Dockerfile does not exist: $RESOLVED_DOCKERFILE"
+            exit 1
+          fi
+
+          while IFS= read -r EXTRA_CONTEXT_PATH; do
+            if [[ -z "$EXTRA_CONTEXT_PATH" ]]; then
+              continue
+            fi
+
+            if [[ ! -d "$EXTRA_CONTEXT_PATH" ]]; then
+              echo "Named build context does not exist: $EXTRA_CONTEXT_PATH"
+              exit 1
+            fi
+          done < <(jq -r --arg target "$BAKE_TARGET" '.target[$target].contexts // {} | to_entries[] | .value' docker-bake.json)
+
+          echo "BAKE_TARGET=$BAKE_TARGET" >> "$GITHUB_ENV"
+
+      - name: Render Buildx bake target
+        run: |
+          docker buildx bake --file docker-bake.json --print "$BAKE_TARGET" | tee bake-rendered.json
+          jq -e --arg target "$BAKE_TARGET" '.target[$target]' bake-rendered.json >/dev/null
+
+      - name: Run Buildx static checks
+        run: |
+          docker buildx bake --file docker-bake.json --check "$BAKE_TARGET"

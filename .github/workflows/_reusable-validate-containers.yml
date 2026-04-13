@@ -24,6 +24,12 @@ on:
         default: 2048  # 2GB default
         type: number
 
+      validation_mode:
+        description: 'Validation mode to apply'
+        required: false
+        default: 'full'
+        type: string
+
     outputs:
       validation_successful:
         description: 'Whether all validations passed'
@@ -87,4 +93,6 @@ jobs:
           IMAGE_TAG: ${{ steps.find-image.outputs.image_tag }}
           PLATFORM: ${{ matrix.platform }}
           MAX_SIZE_MB: ${{ inputs.max_image_size_mb }}
-        run: ./scripts/orchestration/validate-container.sh
+          VALIDATION_MODE: ${{ inputs.validation_mode }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m sst_container_factory.cli workflow-validate-container

@@ -22,7 +22,8 @@ on:
 
       tag_suffix:
         description: 'Tag suffix for the built images'
-        required: true
+        required: false
+        default: ''
         type: string
 
       # SST-specific inputs
@@ -73,24 +74,6 @@ on:
         required: false
         type: string
 
-      # Build configuration
-      containerfile_path:
-        description: 'Path to Containerfile'
-        required: false
-        default: 'Containerfiles/Containerfile'
-        type: string
-
-      docker_context:
-        description: 'Docker build context'
-        required: false
-        default: 'Containerfiles'
-        type: string
-
-      build_target:
-        description: 'Docker build target'
-        required: false
-        type: string
-
       # Advanced options
       force_rebuild:
         description: 'Force rebuild even if images exist'
@@ -100,6 +83,18 @@ on:
 
       ignore_cache:
         description: 'Ignore build cache'
+        required: false
+        default: false
+        type: boolean
+
+      tag_as_latest:
+        description: 'Also publish the built manifest as latest'
+        required: false
+        default: false
+        type: boolean
+
+      publish_master_latest:
+        description: 'Also publish the built manifest as master-latest'
         required: false
         default: false
         type: boolean
@@ -119,6 +114,22 @@ on:
         description: 'Fat manifest tag'
         value: ${{ jobs.create-manifest.outputs.manifest_tag }}
 
+      resolved_tag_suffix:
+        description: 'Resolved tag suffix after planner defaults are applied'
+        value: ${{ jobs.prepare-build-plan.outputs.resolved_tag_suffix }}
+
+      validation_mode:
+        description: 'Validation mode selected by the planner'
+        value: ${{ jobs.prepare-build-plan.outputs.validation_mode }}
+
+      max_image_size_mb:
+        description: 'Maximum image size selected by the planner'
+        value: ${{ jobs.prepare-build-plan.outputs.max_image_size_mb }}
+
+      alias_tags_json:
+        description: 'JSON array of alias manifest tags selected by the planner'
+        value: ${{ jobs.prepare-build-plan.outputs.alias_tags_json }}
+
       build_successful:
         description: 'Whether build was successful'
         value: ${{ jobs.create-manifest.outputs.manifest_tag != '' }}
@@ -128,128 +139,130 @@ env:
   BUILD_NCPUS: 2
 
 jobs:
-  prepare-platforms:
+  prepare-build-plan:
     runs-on: ubuntu-latest
     outputs:
-      platforms: ${{ steps.setup.outputs.platforms }}
-    steps:
-      - name: Setup platforms
-        id: setup
-        run: |
-          PLATFORMS="${{ inputs.build_platforms }}"
-          echo "platforms=$(echo "$PLATFORMS" | jq -R -c 'split(",")' )" >> $GITHUB_OUTPUT
-
-  prepare-image-config:
-    runs-on: ubuntu-latest
-    outputs:
-      image_prefix: ${{ steps.config.outputs.image_prefix }}
-      core_full_pattern: ${{ steps.config.outputs.core_full_pattern }}
-      dev_custom_pattern: ${{ steps.config.outputs.dev_custom_pattern }}
-      experiment_pattern: ${{ steps.config.outputs.experiment_pattern }}
-      default_pattern: ${{ steps.config.outputs.default_pattern }}
+      platform_matrix: ${{ steps.plan.outputs.platform_matrix }}
+      bake_definition_json: ${{ steps.plan.outputs.bake_definition_json }}
+      manifest_tag: ${{ steps.plan.outputs.manifest_tag }}
+      resolved_tag_suffix: ${{ steps.plan.outputs.resolved_tag_suffix }}
+      validation_mode: ${{ steps.plan.outputs.validation_mode }}
+      max_image_size_mb: ${{ steps.plan.outputs.max_image_size_mb }}
+      alias_tags_json: ${{ steps.plan.outputs.alias_tags_json }}
+      download_mpich: ${{ steps.plan.outputs.download_mpich }}
+      download_sst_core: ${{ steps.plan.outputs.download_sst_core }}
+      download_sst_elements: ${{ steps.plan.outputs.download_sst_elements }}
+      mpich_version: ${{ steps.plan.outputs.mpich_version }}
+      sst_version: ${{ steps.plan.outputs.sst_version }}
+      sst_elements_version: ${{ steps.plan.outputs.sst_elements_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Configure image naming
-        id: config
+      - name: Prepare workflow build plan
+        id: plan
         env:
           CONTAINER_TYPE: ${{ inputs.container_type }}
           IMAGE_PREFIX: ${{ inputs.image_prefix }}
+          BUILD_PLATFORMS: ${{ inputs.build_platforms }}
           TAG_SUFFIX: ${{ inputs.tag_suffix }}
           REGISTRY: ${{ env.REGISTRY }}
+          SST_VERSION: ${{ inputs.sst_version }}
+          SST_ELEMENTS_VERSION: ${{ inputs.sst_elements_version }}
+          MPICH_VERSION: ${{ inputs.mpich_version }}
+          BUILD_NCPUS: ${{ env.BUILD_NCPUS }}
+          SST_CORE_REPO: ${{ inputs.sst_core_repo }}
+          SST_CORE_REF: ${{ inputs.sst_core_ref }}
+          SST_ELEMENTS_REPO: ${{ inputs.sst_elements_repo }}
+          SST_ELEMENTS_REF: ${{ inputs.sst_elements_ref }}
           ENABLE_PERF_TRACKING: ${{ inputs.enable_perf_tracking }}
           EXPERIMENT_NAME: ${{ inputs.experiment_name }}
-        run: ./scripts/orchestration/prepare-image-config.sh
+          BASE_IMAGE: ${{ inputs.base_image }}
+          IGNORE_CACHE: ${{ inputs.ignore_cache }}
+          TAG_AS_LATEST: ${{ inputs.tag_as_latest }}
+          PUBLISH_MASTER_LATEST: ${{ inputs.publish_master_latest }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m sst_container_factory.cli workflow-prepare-build
 
   build-containers:
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [prepare-platforms, prepare-image-config]
+    needs: [prepare-build-plan]
     permissions:
       contents: read
       packages: write
     strategy:
-      matrix:
-        platform: ${{ fromJson(needs.prepare-platforms.outputs.platforms) }}
+      matrix: ${{ fromJson(needs.prepare-build-plan.outputs.platform_matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
       - name: Cache MPICH tarball
         id: cache-mpich
-        if: inputs.mpich_version != ''
+        if: needs.prepare-build-plan.outputs.download_mpich == 'true'
         uses: actions/cache@v5
         with:
-          path: Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
-          key: mpich-${{ inputs.mpich_version }}
+          path: Containerfiles/mpich-${{ needs.prepare-build-plan.outputs.mpich_version }}.tar.gz
+          key: mpich-${{ needs.prepare-build-plan.outputs.mpich_version }}
 
       - name: Download MPICH source
-        if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true'
+        if: needs.prepare-build-plan.outputs.download_mpich == 'true' && steps.cache-mpich.outputs.cache-hit != 'true'
         working-directory: Containerfiles
-        run: ../scripts/build/download_tarballs.sh --mpich-version ${{ inputs.mpich_version }}
+        run: PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-sources --mpich-version ${{ needs.prepare-build-plan.outputs.mpich_version }}
 
       - name: Determine SST cache key and paths
         id: sst-cache-config
-        if: inputs.sst_version != ''
+        if: needs.prepare-build-plan.outputs.download_sst_core == 'true'
         run: |
-          # Determine if we need elements based on build target or elements repo input
-          if [[ "${{ inputs.build_target }}" == "sst-full" ]] || [[ "${{ inputs.container_type }}" == "full" ]] || [[ -n "${{ inputs.sst_elements_repo }}" ]]; then
-            ELEMENTS_VERSION="${{ inputs.sst_elements_version }}"
-            if [[ -z "$ELEMENTS_VERSION" ]]; then
-              ELEMENTS_VERSION="${{ inputs.sst_version }}"
-            fi
+          if [[ "${{ needs.prepare-build-plan.outputs.download_sst_elements }}" == 'true' ]]; then
+            ELEMENTS_VERSION="${{ needs.prepare-build-plan.outputs.sst_elements_version }}"
             echo "needs_elements=true" >> $GITHUB_OUTPUT
             echo "effective_elements_version=${ELEMENTS_VERSION}" >> $GITHUB_OUTPUT
-            echo "cache_key=sst-sources-full-${{ inputs.sst_version }}-${ELEMENTS_VERSION}" >> $GITHUB_OUTPUT
+            echo "cache_key=sst-sources-full-${{ needs.prepare-build-plan.outputs.sst_version }}-${ELEMENTS_VERSION}" >> $GITHUB_OUTPUT
           else
             echo "needs_elements=false" >> $GITHUB_OUTPUT
-            echo "cache_key=sst-sources-core-${{ inputs.sst_version }}" >> $GITHUB_OUTPUT
+            echo "cache_key=sst-sources-core-${{ needs.prepare-build-plan.outputs.sst_version }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Cache SST sources (core-only)
         id: cache-sst-core
-        if: inputs.sst_version != '' && steps.sst-cache-config.outputs.needs_elements == 'false'
+        if: needs.prepare-build-plan.outputs.download_sst_core == 'true' && steps.sst-cache-config.outputs.needs_elements == 'false'
         uses: actions/cache@v5
         with:
-          path: Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
+          path: Containerfiles/sstcore-${{ needs.prepare-build-plan.outputs.sst_version }}.tar.gz
           key: ${{ steps.sst-cache-config.outputs.cache_key }}
 
       - name: Cache SST sources (full)
         id: cache-sst-full
-        if: inputs.sst_version != '' && steps.sst-cache-config.outputs.needs_elements == 'true'
+        if: needs.prepare-build-plan.outputs.download_sst_core == 'true' && steps.sst-cache-config.outputs.needs_elements == 'true'
         uses: actions/cache@v5
         with:
           path: |
-            Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
+            Containerfiles/sstcore-${{ needs.prepare-build-plan.outputs.sst_version }}.tar.gz
             Containerfiles/sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz
           key: ${{ steps.sst-cache-config.outputs.cache_key }}
 
       - name: Download SST sources
-        if: inputs.sst_version != '' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
+        if: needs.prepare-build-plan.outputs.download_sst_core == 'true' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
         working-directory: Containerfiles
         run: |
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
-            # Download both SST-core and SST-elements
-            ../scripts/build/download_tarballs.sh --sst-version "${{ inputs.sst_version }}" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}"
+            PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-sources --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}" --sst-elements-version "${{ steps.sst-cache-config.outputs.effective_elements_version }}"
           else
-            # Download only SST-core
-            ../scripts/build/download_tarballs.sh --sst-version "${{ inputs.sst_version }}"
+            PYTHONPATH="${GITHUB_WORKSPACE}" python3 -m sst_container_factory.cli download-sources --sst-version "${{ needs.prepare-build-plan.outputs.sst_version }}"
           fi
 
       - name: Validate SST sources
-        if: inputs.sst_version != ''
+        if: needs.prepare-build-plan.outputs.download_sst_core == 'true'
         working-directory: Containerfiles
         run: |
-          # Check core sources always exist
-          if [ ! -f "sstcore-${{ inputs.sst_version }}.tar.gz" ]; then
-            echo "ERROR: SST-core source file sstcore-${{ inputs.sst_version }}.tar.gz not found"
+          if [ ! -f "sstcore-${{ needs.prepare-build-plan.outputs.sst_version }}.tar.gz" ]; then
+            echo "ERROR: SST-core source file sstcore-${{ needs.prepare-build-plan.outputs.sst_version }}.tar.gz not found"
             exit 1
           fi
 
-          # Check elements sources exist when needed
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
             if [ ! -f "sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz" ]; then
-              echo "ERROR: SST-elements source file sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz not found but required for build target '${{ inputs.build_target }}'"
+              echo "ERROR: SST-elements source file sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz not found"
               exit 1
             fi
           fi
@@ -264,79 +277,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract platform info
-        id: platform
+      - name: Write Buildx bake definition
+        env:
+          BAKE_DEFINITION_JSON: ${{ needs.prepare-build-plan.outputs.bake_definition_json }}
         run: |
-          PLATFORM="${{ matrix.platform }}"
-          ARCH="${PLATFORM##*/}"
-          echo "arch=$ARCH" >> $GITHUB_OUTPUT
-          echo "platform_safe=${PLATFORM//\//-}" >> $GITHUB_OUTPUT
-
-      - name: Prepare container tags
-        id: tags
-        run: |
-          ARCH="${{ steps.platform.outputs.arch }}"
-
-          # Use pre-computed patterns based on container type
-          case "${{ inputs.container_type }}" in
-            "core"|"full")
-              TEMP_TAG="${{ needs.prepare-image-config.outputs.core_full_pattern }}-${ARCH}"
-              ;;
-            "dev"|"custom")
-              TEMP_TAG="${{ needs.prepare-image-config.outputs.dev_custom_pattern }}-${ARCH}"
-              ;;
-            "experiment")
-              TEMP_TAG="${{ needs.prepare-image-config.outputs.experiment_pattern }}-${ARCH}"
-              ;;
-            *)
-              TEMP_TAG="${{ needs.prepare-image-config.outputs.default_pattern }}-${ARCH}"
-              ;;
-          esac
-
-          echo "temp_tag=${TEMP_TAG}" >> $GITHUB_OUTPUT
-          echo "Building: ${TEMP_TAG}"
+          printf '%s\n' "$BAKE_DEFINITION_JSON" > docker-bake.json
+          jq . docker-bake.json
 
       - name: Build and push container
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ inputs.docker_context }}
-          file: ${{ inputs.containerfile_path }}
-          target: ${{ inputs.build_target }}
-          platforms: ${{ matrix.platform }}
-          build-args: |
-            ${{ (inputs.container_type == 'core' || inputs.container_type == 'full') && inputs.sst_version && format('SSTver={0}', inputs.sst_version) || '' }}
-            ${{ inputs.sst_elements_version && format('SST_ELEMENTS_VERSION={0}', inputs.sst_elements_version) || '' }}
-            ${{ inputs.mpich_version && format('mpich={0}', inputs.mpich_version) || '' }}
-            ${{ inputs.sst_core_repo && format('SSTrepo={0}', inputs.sst_core_repo) || '' }}
-            ${{ inputs.sst_core_ref && format('tag={0}', inputs.sst_core_ref) || '' }}
-            ${{ inputs.sst_elements_repo && format('SSTElementsRepo={0}', inputs.sst_elements_repo) || '' }}
-            ${{ inputs.sst_elements_ref && format('elementsTag={0}', inputs.sst_elements_ref) || '' }}
-            ${{ inputs.base_image && format('BASE_IMAGE={0}', inputs.base_image) || '' }}
-            ${{ inputs.enable_perf_tracking && 'ENABLE_PERF_TRACKING=1' || '' }}
-            NCPUS=${{ env.BUILD_NCPUS }}
-          labels: |
-            com.github.sha=${{ github.sha }}
-            com.github.workflow=${{ github.workflow }}
-            com.github.run_id=${{ github.run_id }}
-            com.github.run_number=${{ github.run_number }}
-            com.github.repository=${{ github.repository }}
-            com.github.ref_name=${{ github.ref_name }}
-            com.container.type=${{ inputs.container_type }}
-            sst.perf_tracking=${{ inputs.enable_perf_tracking }}
-          tags: ${{ steps.tags.outputs.temp_tag }}
-          push: true
-          cache-from: type=gha,scope=${{ inputs.container_type }}-${{ inputs.tag_suffix }}-${{ steps.platform.outputs.arch }}
-          cache-to: type=gha,mode=max,scope=${{ inputs.container_type }}-${{ inputs.tag_suffix }}-${{ steps.platform.outputs.arch }}
+        run: |
+          docker buildx bake \
+            --file docker-bake.json \
+            --push \
+            --progress plain \
+            "${{ matrix.bake_target }}"
 
       - name: Output built image
         run: |
-          echo "Built image: ${{ steps.tags.outputs.temp_tag }}"
+          echo "Built image: ${{ matrix.image_tag }}"
 
       - name: Check if MPICH artifact exists
         id: check-mpich-artifact
-        if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true'
+        if: needs.prepare-build-plan.outputs.download_mpich == 'true' && steps.cache-mpich.outputs.cache-hit != 'true'
         run: |
-          ARTIFACT_NAME="mpich-${{ inputs.mpich_version }}"
+          ARTIFACT_NAME="mpich-${{ needs.prepare-build-plan.outputs.mpich_version }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
 
           # Check if artifact already exists from another job
@@ -352,21 +316,20 @@ jobs:
 
       - name: Upload MPICH artifact (for caching across jobs)
         uses: actions/upload-artifact@v6
-        if: inputs.mpich_version != '' && steps.cache-mpich.outputs.cache-hit != 'true' && steps.check-mpich-artifact.outputs.artifact_exists != 'true'
+        if: needs.prepare-build-plan.outputs.download_mpich == 'true' && steps.cache-mpich.outputs.cache-hit != 'true' && steps.check-mpich-artifact.outputs.artifact_exists != 'true'
         with:
           name: ${{ steps.check-mpich-artifact.outputs.artifact_name }}
-          path: Containerfiles/mpich-${{ inputs.mpich_version }}.tar.gz
+          path: Containerfiles/mpich-${{ needs.prepare-build-plan.outputs.mpich_version }}.tar.gz
           retention-days: 10
 
       - name: Check if SST sources artifact exists
         id: check-sst-artifact
-        if: inputs.sst_version != '' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
+        if: needs.prepare-build-plan.outputs.download_sst_core == 'true' && ((steps.sst-cache-config.outputs.needs_elements == 'false' && steps.cache-sst-core.outputs.cache-hit != 'true') || (steps.sst-cache-config.outputs.needs_elements == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true'))
         run: |
-          # Use build-type specific artifact name
           if [[ "${{ steps.sst-cache-config.outputs.needs_elements }}" == "true" ]]; then
-            ARTIFACT_NAME="sst-sources-full-${{ inputs.sst_version }}-${{ steps.sst-cache-config.outputs.effective_elements_version }}"
+            ARTIFACT_NAME="sst-sources-full-${{ needs.prepare-build-plan.outputs.sst_version }}-${{ steps.sst-cache-config.outputs.effective_elements_version }}"
           else
-            ARTIFACT_NAME="sst-sources-core-${{ inputs.sst_version }}"
+            ARTIFACT_NAME="sst-sources-core-${{ needs.prepare-build-plan.outputs.sst_version }}"
           fi
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
 
@@ -383,25 +346,25 @@ jobs:
 
       - name: Upload SST sources artifact (core-only)
         uses: actions/upload-artifact@v6
-        if: inputs.sst_version != '' && steps.cache-sst-core.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true' && steps.sst-cache-config.outputs.needs_elements == 'false'
+        if: needs.prepare-build-plan.outputs.download_sst_core == 'true' && steps.cache-sst-core.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true' && steps.sst-cache-config.outputs.needs_elements == 'false'
         with:
           name: ${{ steps.check-sst-artifact.outputs.artifact_name }}
-          path: Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
+          path: Containerfiles/sstcore-${{ needs.prepare-build-plan.outputs.sst_version }}.tar.gz
           retention-days: 10
 
       - name: Upload SST sources artifact (full)
         uses: actions/upload-artifact@v6
-        if: inputs.sst_version != '' && steps.cache-sst-full.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true' && steps.sst-cache-config.outputs.needs_elements == 'true'
+        if: needs.prepare-build-plan.outputs.download_sst_core == 'true' && steps.cache-sst-full.outputs.cache-hit != 'true' && steps.check-sst-artifact.outputs.artifact_exists != 'true' && steps.sst-cache-config.outputs.needs_elements == 'true'
         with:
           name: ${{ steps.check-sst-artifact.outputs.artifact_name }}
           path: |
-            Containerfiles/sstcore-${{ inputs.sst_version }}.tar.gz
+            Containerfiles/sstcore-${{ needs.prepare-build-plan.outputs.sst_version }}.tar.gz
             Containerfiles/sstelements-${{ steps.sst-cache-config.outputs.effective_elements_version }}.tar.gz
           retention-days: 10
 
   create-manifest:
     runs-on: ubuntu-latest
-    needs: [build-containers, prepare-image-config]
+    needs: [build-containers, prepare-build-plan]
     if: needs.build-containers.result == 'success'
     permissions:
       contents: read
@@ -425,29 +388,15 @@ jobs:
 
       - name: Create multi-architecture manifest
         id: manifest
+        env:
+          PLATFORMS: ${{ inputs.build_platforms }}
+          MANIFEST_TAG: ${{ needs.prepare-build-plan.outputs.manifest_tag }}
+          ALIAS_TAGS: ${{ needs.prepare-build-plan.outputs.alias_tags_json }}
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          PLATFORMS="${{ inputs.build_platforms }}"
-
-          case "${{ inputs.container_type }}" in
-            "core"|"full")
-              MANIFEST_TAG="${{ needs.prepare-image-config.outputs.core_full_pattern }}"
-              ;;
-            "dev"|"custom")
-              MANIFEST_TAG="${{ needs.prepare-image-config.outputs.dev_custom_pattern }}"
-              ;;
-            "experiment")
-              MANIFEST_TAG="${{ needs.prepare-image-config.outputs.experiment_pattern }}"
-              ;;
-            *)
-              MANIFEST_TAG="${{ needs.prepare-image-config.outputs.default_pattern }}"
-              ;;
-          esac
-
           echo "Creating manifest: ${MANIFEST_TAG}"
 
-          source scripts/lib/config.sh
-
-          IMAGES=$(collect_verified_manifest_images "${MANIFEST_TAG}" "$PLATFORMS")
+          IMAGES="$(python3 -c 'import json, os; from sst_container_factory.orchestration import collect_verified_manifest_images; print(json.dumps(collect_verified_manifest_images(os.environ["MANIFEST_TAG"], os.environ["PLATFORMS"])))')"
 
           MANIFESTS=()
           while IFS= read -r manifest_ref; do
@@ -461,6 +410,16 @@ jobs:
           if [ ${#MANIFESTS[@]} -gt 0 ]; then
             echo "Creating multi-arch manifest: ${MANIFEST_TAG}"
             docker buildx imagetools create --tag "${MANIFEST_TAG}" "${MANIFESTS[@]}"
+
+            if [[ "$(echo "$ALIAS_TAGS" | jq 'length')" -gt 0 ]]; then
+              while IFS= read -r alias_tag; do
+                if [[ -n "$alias_tag" ]]; then
+                  echo "Creating alias manifest: ${alias_tag}"
+                  docker buildx imagetools create --tag "${alias_tag}" "${MANIFESTS[@]}"
+                fi
+              done < <(echo "$ALIAS_TAGS" | jq -r '.[]')
+            fi
+
             echo "manifest_tag=${MANIFEST_TAG}" >> $GITHUB_OUTPUT
           else
             echo "ERROR: No images found for manifest creation"

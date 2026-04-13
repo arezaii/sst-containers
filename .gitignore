@@ -1,3 +1,4 @@
 *.tar.gz
 *.bin
-.local-sources/
+.build-contexts/
+*.pyc
