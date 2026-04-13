@@ -1,49 +1,35 @@
-# PHOLD Benchmark Experiment
+# PHOLD Example
 
-This experiment pulls and builds the PHOLD benchmark from the sst-benchmarks repository.
+This experiment clones, builds, and runs the PHOLD benchmark from the `sst-benchmarks` repository at runtime.
 
-## Directory Structure
+## Files
 
-```
+```text
 experiments/phold-example/
-|-- README.md           # This file
-|-- run_simulation.sh   # Script to pull and build PHOLD benchmark
-`-- analyze_results.sh  # Post-processing script
+├── README.md
+├── run_simulation.sh
+└── analyze_results.sh
 ```
 
-## Usage
+## Build the Image
 
-Once the container is built using the "Build Experiment Container" workflow:
+Use the `build-experiment.yml` workflow with these inputs:
+
+- `experiment_name`: `phold-example`
+- `base_image`: for example `sst-core:latest` or `ghcr.io/hpc-ai-adv-dev/sst-full:15.1.0`
+- `tag_suffix`: choose the tag you want to publish
+
+This experiment does not include a custom `Containerfile`, so the workflow copies these files into the selected base image.
+
+## Run the Experiment
 
 ```bash
-# Pull the experiment container
 docker pull ghcr.io/hpc-ai-adv-dev/phold-example:latest
-
-# Run the container
 docker run -it ghcr.io/hpc-ai-adv-dev/phold-example:latest
 
-# Inside the container, experiment files are in /experiments/phold-example
 cd /experiments/phold-example
-
-# Build and run the PHOLD benchmark
 ./run_simulation.sh
-
-# This script will:
-# 1. Clone the sst-benchmarks repository
-# 2. Build the PHOLD benchmark
-# 3. Run a simple PHOLD simulation
-
-# Analyze results (optional)
 ./analyze_results.sh
 ```
 
-## Building the Container
-
-1. Go to Actions > Build Experiment Container
-2. Click "Run workflow"
-3. Fill in the parameters:
-   - **experiment_name**: `phold-example`
-   - **base_image**: e.g., `sst-core:latest` or `ghcr.io/hpc-ai-adv-dev/sst-full:15.1.0`
-   - **build_platforms**: e.g., `linux/amd64` or `linux/amd64,linux/arm64`
-   - **tag_suffix**: `latest` (or any custom tag)
-4. Click "Run workflow"
+`run_simulation.sh` clones `sst-benchmarks`, builds the PHOLD benchmark, and runs a simple simulation. `analyze_results.sh` is a starter script for post-processing output files.
