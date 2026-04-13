@@ -1,187 +1,113 @@
 # SST Container Factory
 
-Containerized SST (Structural Simulation Toolkit) environments with automated GitHub Actions workflows.
+Build and publish SST (Structural Simulation Toolkit) container images through GitHub Actions or the local wrappers in `./sst_container_factory/bin/`.
 
-## Container Types
+## Available Images
 
-1. **Release Containers** - Official SST releases (e.g., v15.1.0)
-2. **Development Containers** - Build dependencies for SST development
-3. **Custom Builds** - Custom SST from any git repository/branch/commit
-4. **Experiment Containers** - Package experiment scripts with base SST environment
-5. **Nightly Builds** - Automated builds from latest SST master branch
+- **Release images** for official SST releases
+- **Development images** with SST build dependencies but no SST install
+- **Source images** from a selected repo/ref or a local `sst-core` checkout
+- **Experiment images** built from content under `experiments/`
+- **Nightly images** from the `sst-core` `master` branch
 
-## GitHub Actions Workflows
+Published image names follow these patterns:
 
-### User-Facing Workflows
+| Build type | Image name |
+|---|---|
+| Release core | `ghcr.io/{owner}/sst-core:{version}` |
+| Release full | `ghcr.io/{owner}/sst-full:{version}` |
+| Development | `ghcr.io/{owner}/sst-dev:{tag}` |
+| Source | `ghcr.io/{owner}/{image_name}:{tag}` |
+| Experiment | `ghcr.io/{owner}/{experiment_name}:{tag}` |
+| Nightly | `ghcr.io/{owner}/sst-core:master-{sha}` and `ghcr.io/{owner}/sst-core:master-latest` |
 
-#### Build SST Release Containers
-
-**Workflow**: `build-release.yml`
-
-**Purpose**: Build official SST release versions
-
-**Required Parameters**:
-- `sst_version`: SST version to build (e.g., "v15.1.0")
-- `container_types`: Types to build - "core", "full", or both
-
-**Optional Parameters**:
-- `build_platforms`: Platforms to build for (default: "linux/amd64,linux/arm64")
-- `mpich_version`: MPICH version (default: "4.0.2")
-- `force_rebuild`: Force rebuild even if image exists (default: false)
-- `ignore_cache`: Ignore build cache (default: false)
-
-**Output**: `ghcr.io/{owner}/ar-sst-core:{version}` and/or `ghcr.io/{owner}/ar-sst-full:{version}`
-
-#### Build SST Development Container
-**Workflow**: `build-dev.yml`
-
-**Purpose**: Build development environment with SST dependencies (no SST itself)
-
-**Optional Parameters**:
-- `tag_suffix`: Container tag suffix (default: "latest")
-- `mpich_version`: MPICH version (default: "4.0.2")
-- `build_platforms`: Platforms to build for (default: "linux/amd64,linux/arm64")
-- `force_rebuild`: Force rebuild (default: false)
-- `ignore_cache`: Ignore build cache (default: false)
-
-**Output**: `ghcr.io/{owner}/sst-dev:{tag_suffix}`
-
-#### Build Custom SST Containers
-
-**Workflow**: `build-custom.yml`
-
-**Purpose**: Build SST from any git repository, branch, tag, or commit
-
-**Required Parameters**:
-- `image_name`: Name for the resulting container image
-- `sst_core_repo`: SST-core git repository URL
-- `sst_core_ref`: Branch, tag, or commit reference
-
-**Optional Parameters**:
-- `sst_elements_repo`: SST-elements git repository URL
-- `sst_elements_ref`: SST-elements branch, tag, or commit
-- `image_tag`: Custom tag for image (auto-generated if not provided)
-- `build_platforms`: Platforms to build for (default: "linux/amd64,linux/arm64")
-- `mpich_version`: MPICH version (default: "4.0.2")
-
-**Output**: `ghcr.io/{owner}/{image_name}:{tag}`
-
-#### Build Experiment Container
-
-**Workflow**: `build-experiment.yml`
-
-**Purpose**: Package experiment scripts with base SST environment
-
-**Required Parameters**:
-- `experiment_name`: Name of experiment directory (must exist in repository)
-
-**Optional Parameters**:
-- `base_image`: Base SST image (default: "ar-sst-core:latest", auto-resolves to current repo)
-- `build_platforms`: Platforms to build for (default: "linux/amd64,linux/arm64")
-- `tag_suffix`: Tag suffix (default: "latest")
-
-**Output**: `ghcr.io/{owner}/{experiment_name}:{tag_suffix}`
-
-**Note**: Automatically resolves base images - use `ar-sst-core:latest` for images in this repo, or full paths like `ghcr.io/user/image:tag` for external images.
-
-#### Nightly SST Core Container Build
-
-**Workflow**: `build-nightly.yml`
-
-**Purpose**: Automated builds from SST master branch when new commits are detected
-
-**Optional Parameters**:
-- `mpich_version`: MPICH version (default: "4.0.2")
-- `build_platforms`: Platforms to build for (default: "linux/amd64,linux/arm64")
-
-**Output**: `ghcr.io/{owner}/ar-sst-core:master-{short_sha}` and `ghcr.io/{owner}/ar-sst-core:master-latest`
-
-**Schedule**: Runs automatically on schedule to check for new commits
+All images include build metadata visible through `docker inspect`.
 
 ## Quick Start
 
-### Use Pre-built Containers
+### Pull a Published Image
+
+Replace `OWNER` with the GitHub repository owner.
+
 ```bash
-# Pull official release (replace 'owner' with repository owner)
-docker pull ghcr.io/owner/ar-sst-core:v15.1.0
-docker run -it ghcr.io/owner/ar-sst-core:v15.1.0
+docker pull ghcr.io/OWNER/sst-core:15.1.2
+docker run -it ghcr.io/OWNER/sst-core:15.1.2
 
-# Pull development environment
-docker pull ghcr.io/owner/sst-dev:latest
-docker run -it ghcr.io/owner/sst-dev:latest
+docker pull ghcr.io/OWNER/sst-dev:latest
+docker run -it ghcr.io/OWNER/sst-dev:latest
 
-# Pull latest nightly build
-docker pull ghcr.io/owner/ar-sst-core:master-latest
-docker run -it ghcr.io/owner/ar-sst-core:master-latest
+docker pull ghcr.io/OWNER/sst-core:master-latest
+docker run -it ghcr.io/OWNER/sst-core:master-latest
 ```
 
-### Build via GitHub Actions
-1. Go to the **Actions** tab
-2. Select the appropriate workflow from the left sidebar
-3. Click **Run workflow**
-4. Fill in the required parameters
-5. Monitor the build progress and download artifacts
+### Build Locally
 
-## Reusable Workflow Components
+Run local commands from the repository root. The public local entry point is `./sst_container_factory/bin/build.sh`.
+Local builds are host-platform only.
 
-The user-facing workflows are built using internal reusable components:
-
-- **`_reusable-build-containers.yml`**: Core container building logic with multi-platform support, MPICH caching, and manifest creation
-- **`_reusable-validate-containers.yml`**: Container validation including size checks, functionality testing, and platform verification
-- **`_reusable-generate-summary.yml`**: Build summary generation with metadata collection and artifact documentation
-
-These internal workflows are automatically combined by the user-facing workflows to provide consistent container builds.
-
-## Features
-
-- **Multi-architecture support**: Native builds for both `linux/amd64` and `linux/arm64` platforms
-- **Automatic platform detection**: Multi-architecture manifests allow `docker pull` to select the correct architecture
-- **Build validation**: Automated container pulling and size verification
-- **Dependency caching**: Cache dependencies like MPICH for faster builds
-- **Consistent tagging**: Git-based tagging for reproducible builds
-- **Build metadata**: Comprehensive labels with build information, source URLs, and commit SHAs
-- **Standardized workflows**: Clean logging, error handling, and consistent patterns
-
-## Development Environment Setup
-
-### Using SST Containers with VS Code DevContainers
-
-The SST development containers are designed to work with VS Code's Dev Containers extension.
-See [DEVCONTAINER_SETUP.md](DEVCONTAINER_SETUP.md) for comprehensive instructions on creating your own devcontainer configuration.
-
-Key benefits:
-- **Git identity preservation** - Your commits maintain proper authorship
-- **SSH key access** - Full GitHub/GitLab authentication inside the container
-- **Source code mounting** - Edit code on your host, build in the container
-- **GitHub Copilot compatibility** - AI assistance works inside containers
-
-## Creating Experiments
-
-### Experiment Structure
-Add a directory to this repository with your experiment files:
-```
-my-experiment/
-├── run_simulation.sh         # Your experiment script
-├── README.md                 # Documentation
-├── Containerfile            # Optional: custom Containerfile with all dependencies
-└── additional_files/        # Any other required files
+```bash
+./sst_container_factory/bin/build.sh dev
+./sst_container_factory/bin/build.sh core --sst-version 15.1.2
+./sst_container_factory/bin/build.sh source --core-path /path/to/sst-core --tag-suffix local-core
+./sst_container_factory/bin/build.sh experiment --experiment-name phold-example
 ```
 
-### Workflow Behavior
-- If `Containerfile` exists: Uses custom container build
-- If no `Containerfile`: Copies experiment files into specified base image
-- Base image automatically resolves to current repository's GHCR when registry not specified
+For more local examples, see [sst_container_factory/README.md](sst_container_factory/README.md).
 
-### Examples
-See existing experiments: `hello-world-mpi/`, `phold-example/`, `tcl-test-experiment/`
+## GitHub Actions Workflows
 
-## Container Registry
+Use the **Actions** tab, choose a workflow, then select **Run workflow**.
 
-All containers are published to GitHub Container Registry (GHCR):
-- **Release containers**: `ghcr.io/{owner}/ar-sst-core:{version}`, `ghcr.io/{owner}/ar-sst-full:{version}`
-- **Development containers**: `ghcr.io/{owner}/sst-dev:{tag}`
-- **Custom containers**: `ghcr.io/{owner}/{custom-name}:{tag}`
-- **Experiment containers**: `ghcr.io/{owner}/{experiment-name}:{tag}`
-- **Nightly containers**: `ghcr.io/{owner}/ar-sst-core:master-{sha}`, `ghcr.io/{owner}/ar-sst-core:master-latest`
+| Workflow | Purpose | Main inputs | Published image |
+|---|---|---|---|
+| `build-release.yml` | Build official SST release images | `sst_version`, `container_types`, optional `sst_elements_version`, `tag_as_latest` | `sst-core:{version}`, `sst-full:{version}` |
+| `build-dev.yml` | Build the development image | `tag_suffix`, `mpich_version` | `sst-dev:{tag_suffix}` |
+| `build-custom.yml` | Build from a repo/ref | `sst_core_ref`, optional `sst_core_repo`, `sst_elements_repo`, `sst_elements_ref`, `image_name`, `image_tag` | `{image_name}:{tag}` |
+| `build-experiment.yml` | Package an experiment from `experiments/` | `experiment_name`, optional `base_image`, `tag_suffix` | `{experiment_name}:{tag_suffix}` |
+| `build-nightly.yml` | Build from the latest `sst-core` `master` commit | optional `force_rebuild`, `mpich_version` | `sst-core:master-{sha}`, `sst-core:master-latest` |
 
-All containers include metadata accessible via `docker inspect`.
+Common workflow defaults:
+
+- `mpich_version`: `4.0.2`
+- `build_platforms`: `linux/amd64,linux/arm64`
+
+Release and source workflows also support `enable_perf_tracking`.
+
+All user-facing workflows, including `build-experiment.yml`, run the shared container validation step after a successful build. For experiment images, that validation is generic image validation such as image inspection, size checks, and container instantiation. It does not run experiment-specific test logic automatically.
+
+## Experiments
+
+Add experiment content under `experiments/<name>/`.
+
+```text
+experiments/my-experiment/
+├── run_simulation.sh
+├── README.md
+├── Containerfile
+└── ...
+```
+
+If an experiment includes a `Containerfile`, the build uses that file directly and ignores `base_image`. Otherwise the repository copies the experiment files into the selected base image. Short base-image names such as `sst-core:latest` resolve to this repository's GHCR namespace.
+
+Current examples:
+
+- [experiments/ahp-graph/README.md](experiments/ahp-graph/README.md)
+- `experiments/hello-world-mpi/`
+- [experiments/phold-example/README.md](experiments/phold-example/README.md)
+- [experiments/tcl-test-experiment/README.md](experiments/tcl-test-experiment/README.md)
+
+## Repository Docs
+
+- [sst_container_factory/README.md](sst_container_factory/README.md): local wrapper and downloader usage
+- [DEVCONTAINER_SETUP.md](DEVCONTAINER_SETUP.md): VS Code Dev Container setup
+- [tests/README.md](tests/README.md): test inventory and usage
+- [CLI_NORMALIZATION.md](CLI_NORMALIZATION.md): maintainer notes for the public local CLI
+
+## Internal Workflow Pieces
+
+The user-facing workflows call these reusable workflows:
+
+- `_reusable-build-containers.yml` for build planning, caching, and manifest publication
+- `_reusable-validate-containers.yml` for container validation
+- `_reusable-generate-summary.yml` for run summaries and metadata
+
