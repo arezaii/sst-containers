@@ -1,21 +1,27 @@
-# SST Multi-Version Testing Container
+# TCL Test Experiment
 
-Container with SST 14.1.0 and 15.0.0 plus test suite for compatibility testing.
+This experiment uses a custom `Containerfile` to assemble a reusable test image with SST 14.1.0 and 15.0.0.
 
-## Quick Start
+## Build the Image
 
-1. **Build**: Use Actions > Build Experiment Container with experiment name `tcl-test-experiment`
-	Use `base_image` to select the SST image you want to layer this experiment onto.
+Use the `build-experiment.yml` workflow with these inputs:
 
-2. **Run**:
+- `experiment_name`: `tcl-test-experiment`
+- `tag_suffix`: choose the tag you want to publish
+
+This experiment includes its own `Containerfile`, so the workflow ignores `base_image`.
+
+## Run the Image
+
 ```bash
 docker pull ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest
 docker run -it ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest
 ```
 
-## Usage
+The container defaults to SST 15.0.0 and opens a shell in the configured test build directory.
 
-**Switch SST versions**:
+## Choose an SST Version
+
 ```bash
 # SST 15.0.0 (default)
 docker run -it ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest
@@ -24,16 +30,21 @@ docker run -it ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest
 docker run -it -e SST_VERSION=14.1.0 ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest
 ```
 
-**Run tests** (inside container):
+Supported values for `SST_VERSION` are `14.1.0` and `15.0.0`.
+
+## Run the Test Suite
+
+Inside the container:
+
 ```bash
-make test     # Run tests
+make test
 ```
 
-**Compare versions**:
+Or run the tests directly from the host:
+
 ```bash
-# Test both versions
-docker run --rm -e SST_VERSION=15.0.0 ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest bash -c "make test"
-docker run --rm -e SST_VERSION=14.1.0 ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest bash -c "make test"
+docker run --rm -e SST_VERSION=15.0.0 ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest make test
+docker run --rm -e SST_VERSION=14.1.0 ghcr.io/hpc-ai-adv-dev/tcl-test-experiment:latest make test
 ```
 
 
