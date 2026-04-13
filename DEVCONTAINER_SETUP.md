@@ -10,7 +10,7 @@ Create `.devcontainer/devcontainer.json` in your SST project root:
 ```json
 {
   "name": "SST Development",
-  "image": "ghcr.io/ai-hpc-adv-dev/sst-dev:latest",
+  "image": "ghcr.io/hpc-ai-adv-dev/sst-dev:latest",
 
   "mounts": [
     "source=${localEnv:HOME}/.gitconfig,target=/root/.gitconfig,type=bind,consistency=cached",
@@ -41,11 +41,11 @@ The container provides the build environment and binds the current directory, bu
 ## Available SST Container Images
 
 ### Development Images (Recommended)
-- `ghcr.io/ai-hpc-adv-dev/sst-dev:latest` - Complete build environment with MPICH and all dependencies
+- `ghcr.io/hpc-ai-adv-dev/sst-dev:latest` - Complete build environment with MPICH and all dependencies
 
 ### Runtime Images
-- `ghcr.io/ai-hpc-adv-dev/sst-core:15.1.0` - SST-core only (smaller)
-- `ghcr.io/ai-hpc-adv-dev/sst-full:15.1.0` - SST-core + SST-elements (larger)
+- `ghcr.io/hpc-ai-adv-dev/sst-core:15.1.0` - SST-core only (smaller)
+- `ghcr.io/hpc-ai-adv-dev/sst-full:15.1.0` - SST-core + SST-elements (larger)
 
 **For development, use `sst-dev:latest`** - it has all build tools and dependencies without pre-built SST (so you can build your own version).
 
@@ -55,7 +55,7 @@ The container provides the build environment and binds the current directory, bu
 ```json
 {
   "name": "SST-Core Dev",
-  "image": "ghcr.io/ai-hpc-adv-dev/sst-dev:latest",
+  "image": "ghcr.io/hpc-ai-adv-dev/sst-dev:latest",
 
   "mounts": [
     // Preserve git identity
@@ -91,7 +91,7 @@ If you want to test against a specific SST version without building:
 ```json
 {
   "name": "SST 15.1.0 Testing",
-  "image": "ghcr.io/ai-hpc-adv-dev/sst-full:15.1.0",
+  "image": "ghcr.io/hpc-ai-adv-dev/sst-full:15.1.0",
 
   "mounts": [
     "source=${localEnv:HOME}/.gitconfig,target=/root/.gitconfig,type=bind,consistency=cached",
