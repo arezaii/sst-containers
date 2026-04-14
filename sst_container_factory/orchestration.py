@@ -1809,12 +1809,6 @@ def _plan_source_build_spec(normalized_request: SourceBuildRequest) -> BuildSpec
     )
 
 
-def plan_source_build_spec(request: SourceBuildRequest) -> BuildSpec:
-    """Return the shared build spec for a source build request."""
-
-    return _plan_source_build_spec(normalize_source_build_request(request))
-
-
 def _plan_experiment_build_spec(
     normalized_request: ExperimentBuildRequest,
     *,
@@ -1889,21 +1883,6 @@ def _plan_experiment_build_spec(
             normalized_request.build_platforms,
         ),
         publication=_local_publication_spec(image_tag),
-    )
-
-
-def plan_experiment_build_spec(
-    request: ExperimentBuildRequest,
-    *,
-    container_engine: str | None = None,
-    validate_base_image: bool = True,
-) -> BuildSpec:
-    """Return the shared build spec for an experiment build request."""
-
-    return _plan_experiment_build_spec(
-        normalize_experiment_build_request(request),
-        container_engine=container_engine,
-        validate_base_image=validate_base_image,
     )
 
 
