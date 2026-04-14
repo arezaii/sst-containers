@@ -1473,15 +1473,6 @@ def _remove_image(container_engine: str, image_tag: str, *, warning_message: str
     return True
 
 
-def _inspect_built_image_size(container_engine: str, image_tag: str) -> int:
-    """Inspect a built image and report its size in MB."""
-
-    metadata = _inspect_image_json(container_engine, image_tag)
-    image_size_mb = _image_size_mb_from_metadata(metadata)
-    log_info(f"Image size: {image_size_mb}MB")
-    return image_size_mb
-
-
 def _download_file_url(url: str, destination: Path) -> None:
     """Download a URL to a destination file path."""
 
