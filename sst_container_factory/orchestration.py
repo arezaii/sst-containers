@@ -1717,111 +1717,37 @@ def _build_standard_image(build_spec: BuildSpec, *, container_engine: str) -> st
     return build_spec.primary_platform_build.image_tag
 
 
-def _local_source_build_request(
-    *,
-    registry: str,
-    target_platform: str,
-    mpich_version: str,
-    build_ncpus: str,
-    tag_suffix: str,
-    tag_suffix_set: bool,
-    enable_perf_tracking: bool,
-    no_cache: bool,
-    sst_core_path: str,
-    sst_core_repo: str,
-    sst_core_ref: str,
-    sst_elements_repo: str,
-    sst_elements_ref: str,
-    container_engine: str | None,
-) -> SourceBuildRequest:
-    """Translate a local source-backed build request into the canonical source-build request."""
+def _build_source_image(build_spec: BuildSpec, *, container_engine: str) -> str:
+    """Build a source (custom) image, staging a local checkout if required."""
 
-    return SourceBuildRequest(
-        target_platform=target_platform,
-        tag_suffix=tag_suffix if tag_suffix_set else "",
-        sst_core_ref=sst_core_ref,
-        sst_core_repo=sst_core_repo,
-        sst_core_path=sst_core_path,
-        sst_elements_repo=sst_elements_repo,
-        sst_elements_ref=sst_elements_ref,
-        mpich_version=mpich_version,
-        build_ncpus=build_ncpus,
-        registry=registry,
-        enable_perf_tracking=enable_perf_tracking,
-        no_cache=no_cache,
-        cleanup=False,
-        validation_mode="none",
+    staged_local_source = False
+    if build_spec.source.uses_local_core_checkout:
+        stage_local_sst_core_checkout(build_spec.source.sst_core_path)
+        staged_local_source = True
+
+    try:
+        _run_container_build(
+            _container_plan_from_platform_build(build_spec.primary_platform_build),
+            container_engine=container_engine,
+            failure_message="Container build failed",
+            cwd=REPO_ROOT,
+        )
+    finally:
+        if staged_local_source:
+            reset_local_source_stage_dir()
+
+    return build_spec.primary_platform_build.image_tag
+
+
+def _build_experiment_image(build_spec: BuildSpec, *, container_engine: str) -> str:
+    """Build an experiment image for the build entrypoint."""
+
+    _run_container_build(
+        _container_plan_from_platform_build(build_spec.primary_platform_build),
         container_engine=container_engine,
+        failure_message="Experiment container build failed",
     )
-
-
-def _delegate_local_source_build(
-    *,
-    registry: str,
-    target_platform: str,
-    mpich_version: str,
-    build_ncpus: str,
-    tag_suffix: str,
-    tag_suffix_set: bool,
-    enable_perf_tracking: bool,
-    no_cache: bool,
-    sst_core_path: str,
-    sst_core_repo: str,
-    sst_core_ref: str,
-    sst_elements_repo: str,
-    sst_elements_ref: str,
-    container_engine: str,
-) -> str:
-    """Delegate a local build source image request to the canonical source-build path."""
-    result = source_build(
-        _local_source_build_request(
-            registry=registry,
-            target_platform=target_platform,
-            mpich_version=mpich_version,
-            build_ncpus=build_ncpus,
-            tag_suffix=tag_suffix,
-            tag_suffix_set=tag_suffix_set,
-            enable_perf_tracking=enable_perf_tracking,
-            no_cache=no_cache,
-            sst_core_path=sst_core_path,
-            sst_core_repo=sst_core_repo,
-            sst_core_ref=sst_core_ref,
-            sst_elements_repo=sst_elements_repo,
-            sst_elements_ref=sst_elements_ref,
-            container_engine=container_engine,
-        )
-    )
-    return result.image_tag
-
-
-def _delegate_local_experiment_build(
-    *,
-    registry: str,
-    target_platform: str,
-    tag_suffix: str,
-    base_image: str,
-    experiment_name: str,
-    no_cache: bool,
-    container_engine: str,
-) -> str:
-    """Delegate a build entrypoint experiment image build to the canonical experiment entrypoint."""
-
-    if not experiment_name:
-        raise OrchestrationError("Experiment builds require an experiment name")
-
-    result = experiment_build(
-        ExperimentBuildRequest(
-            experiment_name=experiment_name,
-            base_image=base_image,
-            build_platforms=target_platform,
-            registry=registry,
-            tag_suffix=tag_suffix,
-            validation_mode="none",
-            no_cache=no_cache,
-            container_engine=container_engine,
-        )
-    )
-    return result.image_tag
+    return build_spec.primary_platform_build.image_tag
 
 
 def _plan_source_build_spec(normalized_request: SourceBuildRequest) -> BuildSpec:
@@ -2013,20 +1939,21 @@ def plan_build_spec(
     if normalized_request.container_type == "custom":
         custom_spec = _plan_source_build_spec(
             normalize_source_build_request(
-                _local_source_build_request(
-                    registry=normalized_request.registry,
+                SourceBuildRequest(
                     target_platform=normalized_request.target_platform,
-                    mpich_version=normalized_request.mpich_version,
-                    build_ncpus=normalized_request.build_ncpus,
-                    tag_suffix=normalized_request.tag_suffix,
-                    tag_suffix_set=normalized_request.tag_suffix_set,
-                    enable_perf_tracking=normalized_request.enable_perf_tracking,
-                    no_cache=normalized_request.no_cache,
-                    sst_core_path=normalized_request.sst_core_path,
-                    sst_core_repo=normalized_request.sst_core_repo,
+                    tag_suffix=normalized_request.tag_suffix if normalized_request.tag_suffix_set else "",
                     sst_core_ref=normalized_request.sst_core_ref,
+                    sst_core_repo=normalized_request.sst_core_repo,
+                    sst_core_path=normalized_request.sst_core_path,
                     sst_elements_repo=normalized_request.sst_elements_repo,
                     sst_elements_ref=normalized_request.sst_elements_ref,
+                    mpich_version=normalized_request.mpich_version,
+                    build_ncpus=normalized_request.build_ncpus,
+                    registry=normalized_request.registry,
+                    enable_perf_tracking=normalized_request.enable_perf_tracking,
+                    no_cache=normalized_request.no_cache,
+                    cleanup=False,
+                    validation_mode="none",
                     container_engine=normalized_request.container_engine,
                 )
             )
@@ -2160,30 +2087,13 @@ def build(request: BuildRequest) -> BuildResult:
                     container_engine=container_engine,
                 )
             elif normalized_request.container_type == "custom":
-                image_tag = _delegate_local_source_build(
-                    registry=normalized_request.registry,
-                    target_platform=normalized_request.target_platform,
-                    mpich_version=normalized_request.mpich_version,
-                    build_ncpus=normalized_request.build_ncpus,
-                    tag_suffix=normalized_request.tag_suffix,
-                    tag_suffix_set=normalized_request.tag_suffix_set,
-                    enable_perf_tracking=normalized_request.enable_perf_tracking,
-                    no_cache=normalized_request.no_cache,
-                    sst_core_path=normalized_request.sst_core_path,
-                    sst_core_repo=normalized_request.sst_core_repo,
-                    sst_core_ref=normalized_request.sst_core_ref,
-                    sst_elements_repo=normalized_request.sst_elements_repo,
-                    sst_elements_ref=normalized_request.sst_elements_ref,
+                image_tag = _build_source_image(
+                    build_spec,
                     container_engine=container_engine,
                 )
             elif normalized_request.container_type == "experiment":
-                image_tag = _delegate_local_experiment_build(
-                    registry=normalized_request.registry,
-                    target_platform=normalized_request.target_platform,
-                    tag_suffix=normalized_request.tag_suffix,
-                    base_image=normalized_request.base_image,
-                    experiment_name=normalized_request.experiment_name,
-                    no_cache=normalized_request.no_cache,
+                image_tag = _build_experiment_image(
+                    build_spec,
                     container_engine=container_engine,
                 )
             else:

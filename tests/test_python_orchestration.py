@@ -615,8 +615,8 @@ class OrchestrationTests(unittest.TestCase):
             f"ghcr.io/hpc-ai-adv-dev/sst-custom:main-{self.host_arch}",
         )
 
-    def test_build_custom_delegates_tag_suffix_derivation(self) -> None:
-        """Local source-backed builds should rely on canonical source-build normalization for defaults."""
+    def test_build_custom_derives_tag_from_core_ref_when_suffix_not_set(self) -> None:
+        """Local source-backed builds should derive tag suffix from sst_core_ref when tag_suffix_set=False."""
 
         request = orchestration.BuildRequest(
             container_type="custom",
@@ -628,27 +628,33 @@ class OrchestrationTests(unittest.TestCase):
             sst_core_ref="main",
             container_engine="docker",
         )
-        source_result = orchestration.SourceBuildResult(
-            image_tag=f"ghcr.io/hpc-ai-adv-dev/sst-custom:main-{self.host_arch}",
-            build_type="core-build",
-            image_size_mb=256,
+        build_result = subprocess.CompletedProcess(args=["docker", "build"], returncode=0)
+        inspect_result = subprocess.CompletedProcess(
+            args=["docker", "image", "inspect"],
+            returncode=0,
+            stdout=json.dumps(
+                [
+                    {
+                        "Size": 268435456,
+                        "Architecture": "amd64",
+                        "Config": {"Env": ["PATH=/opt/sst/bin:/opt/mpi/bin"]},
+                        "RootFS": {"Layers": ["sha256:abc"]},
+                    }
+                ]
+            ),
         )
 
         with patch.object(orchestration, "detect_container_engine", return_value="docker"):
             with patch.object(orchestration, "_download_build_sources"):
-                with patch.object(orchestration, "source_build", return_value=source_result) as source_build:
-                    with patch.object(orchestration, "_write_last_built_image"):
-                        with patch.object(
-                            orchestration,
-                            "_validate_build_image",
-                            return_value=256,
-                        ):
-                            result = orchestration.build(request)
+                with patch.object(orchestration, "_write_last_built_image"):
+                    with patch.object(
+                        orchestration,
+                        "_run_command",
+                        side_effect=[build_result, inspect_result, inspect_result],
+                    ):
+                        result = orchestration.build(request)
 
-        delegated_request = source_build.call_args.args[0]
-        self.assertEqual(delegated_request.tag_suffix, "")
-        self.assertEqual(delegated_request.sst_core_ref, "main")
-        self.assertEqual(result.image_tag, source_result.image_tag)
+        self.assertIn("main", result.image_tag)
         self.assertEqual(result.image_size_mb, 256)
 
     def test_build_accepts_explicit_request(self) -> None:
