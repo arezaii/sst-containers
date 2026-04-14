@@ -431,98 +431,19 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(status, 0, stderr)
         self.assertIn("--sst-elements-version", stdout)
 
-    def test_prepare_image_config_generates_expected_outputs(self) -> None:
-        """Prepare-image-config should compute the expected patterns."""
+    def test_removed_workflow_helper_commands_are_rejected(self) -> None:
+        """Dead workflow-only helper commands should stay out of the public CLI."""
 
-        with tempfile.NamedTemporaryFile() as output_file:
-            env = {
-                "CONTAINER_TYPE": "core",
-                "IMAGE_PREFIX": "hpc-ai-adv-dev/sst",
-                "TAG_SUFFIX": "15.1.2",
-                "REGISTRY": "ghcr.io",
-                "GITHUB_OUTPUT": output_file.name,
-            }
-            with patch.dict(os.environ, env, clear=False):
-                result = adapters.prepare_image_config_from_env()
+        for command in (
+            "workflow-prepare-image-config",
+            "workflow-validate-source-inputs",
+            "workflow-validate-experiment-inputs",
+        ):
+            with self.subTest(command=command):
+                status, _stdout, stderr = self._run_python_cli([command])
 
-            self.assertEqual(result.image_prefix, "hpc-ai-adv-dev/sst")
-            self.assertEqual(
-                result.core_full_pattern,
-                "ghcr.io/hpc-ai-adv-dev/sst-core:15.1.2",
-            )
-
-            written = Path(output_file.name).read_text(encoding="utf-8")
-            self.assertIn("image_prefix=hpc-ai-adv-dev/sst", written)
-            self.assertIn(
-                "core_full_pattern=ghcr.io/hpc-ai-adv-dev/sst-core:15.1.2",
-                written,
-            )
-
-    def test_validate_custom_inputs_requires_elements_ref_for_full_build(self) -> None:
-        """Custom input validation should reject incomplete full-build requests."""
-
-        env = {
-            "CORE_REF": "feature/test",
-            "ELEMENTS_REPO": "https://github.com/sstsimulator/sst-elements.git",
-            "ELEMENTS_REF": "",
-            "IMAGE_TAG": "",
-        }
-        with patch.dict(os.environ, env, clear=False):
-            with self.assertRaises(ValueError):
-                adapters.validate_source_inputs_from_env()
-
-    def test_validate_experiment_inputs_detects_containerfile(self) -> None:
-        """Experiment validation should accept directories with a custom Containerfile."""
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(temp_dir)
-            experiment_dir = repo_root / "experiments" / "demo-experiment"
-            experiment_dir.mkdir(parents=True)
-            (experiment_dir / "Containerfile").write_text("FROM ubuntu:24.04\n", encoding="utf-8")
-            (experiment_dir / "README.md").write_text("demo\n", encoding="utf-8")
-
-            env = {
-                "EXPERIMENT_NAME": "demo-experiment",
-                "BASE_IMAGE": "sst-core:latest",
-                "REPO_OWNER": "hpc-ai-adv-dev",
-            }
-            with patch.dict(os.environ, env, clear=False):
-                with patch.object(orchestration, "REPO_ROOT", repo_root):
-                    with patch.object(orchestration, "detect_container_engine", return_value="docker"):
-                        result = adapters.validate_experiment_inputs_from_env()
-
-            self.assertTrue(result.experiment_exists)
-            self.assertTrue(result.has_containerfile)
-            self.assertEqual(result.resolved_base_image, "")
-            self.assertEqual(result.files_count, 2)
-
-    def test_validate_experiment_inputs_resolves_short_base_image(self) -> None:
-        """Experiment validation should resolve short GHCR image names."""
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(temp_dir)
-            experiment_dir = repo_root / "experiments" / "demo-experiment"
-            experiment_dir.mkdir(parents=True)
-            (experiment_dir / "run.sh").write_text("echo demo\n", encoding="utf-8")
-
-            env = {
-                "EXPERIMENT_NAME": "demo-experiment",
-                "BASE_IMAGE": "sst-core:latest",
-                "REPO_OWNER": "hpc-ai-adv-dev",
-            }
-            with patch.dict(os.environ, env, clear=False):
-                with patch.object(orchestration, "REPO_ROOT", repo_root):
-                    with patch.object(orchestration, "detect_container_engine", return_value="docker"):
-                        with patch.object(orchestration, "inspect_remote_manifest", return_value=True):
-                            result = adapters.validate_experiment_inputs_from_env()
-
-            self.assertTrue(result.experiment_exists)
-            self.assertFalse(result.has_containerfile)
-            self.assertEqual(
-                result.resolved_base_image,
-                "ghcr.io/hpc-ai-adv-dev/sst-core:latest",
-            )
-            self.assertEqual(result.files_count, 1)
+                self.assertEqual(status, 1)
+                self.assertIn(f"invalid choice: '{command}'", stderr)
 
     def test_validate_container_reports_size_and_platform(self) -> None:
         """Container validation should return the computed image size."""

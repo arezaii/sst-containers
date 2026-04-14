@@ -8,11 +8,8 @@ import sys
 from typing import Any, Callable
 
 from .adapters import (
-    prepare_image_config_from_env,
     prepare_workflow_build_from_env,
     validate_container_from_env,
-    validate_source_inputs_from_env,
-    validate_experiment_inputs_from_env,
 )
 
 from .logging_utils import log_error
@@ -26,7 +23,6 @@ from .orchestration import (
     build,
     BuildRequest,
     require_host_platform,
-    require_single_host_platform,
 )
 
 
@@ -397,13 +393,6 @@ Examples:
 
     local_build_parser.add_argument("--download-script", help=argparse.SUPPRESS)
 
-    prepare_image_config_parser = _add_parser(
-        subparsers,
-        "workflow-prepare-image-config",
-        lambda _args: prepare_image_config_from_env(),
-    )
-    del prepare_image_config_parser
-
     prepare_workflow_build_parser = _add_parser(
         subparsers,
         "workflow-prepare-build",
@@ -417,20 +406,6 @@ Examples:
         lambda _args: validate_container_from_env(),
     )
     del validate_container_parser
-
-    validate_custom_inputs_parser = _add_parser(
-        subparsers,
-        "workflow-validate-source-inputs",
-        lambda _args: validate_source_inputs_from_env(),
-    )
-    del validate_custom_inputs_parser
-
-    validate_experiment_inputs_parser = _add_parser(
-        subparsers,
-        "workflow-validate-experiment-inputs",
-        lambda _args: validate_experiment_inputs_from_env(),
-    )
-    del validate_experiment_inputs_parser
 
     return parser
 

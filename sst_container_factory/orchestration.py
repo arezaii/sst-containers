@@ -87,35 +87,6 @@ class OrchestrationError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class PrepareImageConfigResult:
-    """Resolved image naming patterns for a build."""
-
-    image_prefix: str
-    core_full_pattern: str
-    dev_custom_pattern: str
-    experiment_pattern: str
-    default_pattern: str
-
-
-@dataclass(frozen=True)
-class ValidateSourceInputsResult:
-    """Resolved build settings for the custom workflow."""
-
-    build_type: str
-    tag_suffix: str
-
-
-@dataclass(frozen=True)
-class ValidateExperimentInputsResult:
-    """Validated experiment workflow inputs."""
-
-    experiment_exists: bool
-    has_containerfile: bool
-    resolved_base_image: str
-    files_count: int
-
-
-@dataclass(frozen=True)
 class ValidateContainerResult:
     """Validated registry container metadata."""
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import orchestration as orchestration_module
 from .github_actions import end_group, set_output, start_group
-from .logging_utils import log_error, log_info, log_success
+from .logging_utils import log_info, log_success
 from .orchestration import (
     SourceBuildRequest,
     SourceBuildResult,
@@ -27,10 +27,7 @@ from .orchestration import (
     BuildResult,
     build,
     plan_workflow_build_spec,
-    PrepareImageConfigResult,
     ValidateContainerResult,
-    ValidateSourceInputsResult,
-    ValidateExperimentInputsResult,
     WorkflowBuildRequest,
 )
 
@@ -237,164 +234,6 @@ def prepare_workflow_build_from_env(env: Mapping[str, str] | None = None) -> orc
     end_group()
     log_success("Workflow build plan ready")
     return build_spec
-
-
-def prepare_image_config_from_env(env: Mapping[str, str] | None = None) -> PrepareImageConfigResult:
-    """Compute workflow image naming outputs from environment variables."""
-
-    env_map = _env_map(env)
-    container_type = env_map.get("CONTAINER_TYPE", "")
-    image_prefix = env_map.get("IMAGE_PREFIX", "")
-    tag_suffix = env_map.get("TAG_SUFFIX", "")
-    registry = env_map.get("REGISTRY", "ghcr.io")
-    enable_perf_tracking = env_map.get("ENABLE_PERF_TRACKING", "false")
-    experiment_name = env_map.get("EXPERIMENT_NAME", "")
-
-    if not container_type:
-        raise ValueError("CONTAINER_TYPE is required")
-    if not image_prefix:
-        raise ValueError("IMAGE_PREFIX is required")
-    if not tag_suffix:
-        raise ValueError("TAG_SUFFIX is required")
-
-    start_group("Prepare Image Configuration")
-    log_info(f"Container type:      {container_type}")
-    log_info(f"Image prefix:        {image_prefix}")
-    log_info(f"Tag suffix:          {tag_suffix}")
-    log_info(f"Registry:            {registry}")
-    log_info(f"Perf tracking:       {enable_perf_tracking}")
-
-    original_image_prefix = image_prefix
-    if enable_perf_tracking == "true" and container_type in {"core", "full", "custom"}:
-        image_prefix = f"{image_prefix}-perf-track"
-        log_info(f"Perf tracking enabled: image prefix modified to {image_prefix}")
-
-    result = PrepareImageConfigResult(
-        image_prefix=image_prefix,
-        core_full_pattern=f"{registry}/{image_prefix}-{container_type}:{tag_suffix}",
-        dev_custom_pattern=f"{registry}/{image_prefix}:{tag_suffix}",
-        experiment_pattern=f"{registry}/{original_image_prefix}/{experiment_name}:{tag_suffix}",
-        default_pattern=f"{registry}/{image_prefix}:{tag_suffix}",
-    )
-
-    log_info("Computed patterns:")
-    log_info(f"  core_full_pattern:   {result.core_full_pattern}")
-    log_info(f"  dev_custom_pattern:  {result.dev_custom_pattern}")
-    log_info(f"  experiment_pattern:  {result.experiment_pattern}")
-    log_info(f"  default_pattern:     {result.default_pattern}")
-    end_group()
-
-    set_output("image_prefix", result.image_prefix)
-    set_output("core_full_pattern", result.core_full_pattern)
-    set_output("dev_custom_pattern", result.dev_custom_pattern)
-    set_output("experiment_pattern", result.experiment_pattern)
-    set_output("default_pattern", result.default_pattern)
-    log_success("Image configuration complete")
-    return result
-
-
-def validate_source_inputs_from_env(env: Mapping[str, str] | None = None) -> ValidateSourceInputsResult:
-    """Validate build-custom workflow inputs from environment variables."""
-
-    env_map = _env_map(env)
-    core_ref = env_map.get("CORE_REF", "")
-    elements_repo = env_map.get("ELEMENTS_REPO", "")
-    elements_ref = env_map.get("ELEMENTS_REF", "")
-    image_tag = env_map.get("IMAGE_TAG", "")
-
-    if not core_ref:
-        raise ValueError("CORE_REF (sst_core_ref input) is required")
-
-    start_group("Validate Source Build Inputs")
-    if elements_repo:
-        if not elements_ref:
-            raise ValueError(
-                "SST-elements ref (ELEMENTS_REF) is required when elements_repo is provided"
-            )
-        build_type = "full"
-        log_info("Build type: full (core + elements)")
-    else:
-        build_type = "core"
-        log_info("Build type: core only")
-
-    tag_suffix = image_tag or orchestration_module.sanitize_tag_suffix(core_ref)
-    if image_tag:
-        log_info(f"Tag suffix: {tag_suffix} (explicit)")
-    else:
-        log_info(f"Tag suffix: {tag_suffix} (derived from core ref)")
-    end_group()
-
-    result = ValidateSourceInputsResult(build_type=build_type, tag_suffix=tag_suffix)
-    set_output("build_type", result.build_type)
-    set_output("tag_suffix", result.tag_suffix)
-    log_success(
-        f"Input validation complete: build_type={result.build_type}, tag_suffix={result.tag_suffix}"
-    )
-    return result
-
-
-def validate_experiment_inputs_from_env(env: Mapping[str, str] | None = None) -> ValidateExperimentInputsResult:
-    """Validate build-experiment workflow inputs from environment variables."""
-
-    env_map = _env_map(env)
-    experiment_name = env_map.get("EXPERIMENT_NAME", "")
-    base_image = env_map.get("BASE_IMAGE", "sst-core:latest")
-    repo_owner = env_map.get("REPO_OWNER", env_map.get("USER", ""))
-    container_engine = orchestration_module.detect_container_engine(env_map.get("CONTAINER_ENGINE"))
-
-    if not experiment_name:
-        raise ValueError("EXPERIMENT_NAME is required")
-
-    start_group("Validate Experiment Inputs")
-    log_info(f"Experiment name: {experiment_name}")
-
-    experiment_dir = orchestration_module.experiment_directory(experiment_name)
-    if not experiment_dir.is_dir():
-        log_error(f"Experiment directory '{experiment_name}' does not exist")
-        set_output("experiment_exists", "false")
-        end_group()
-        return ValidateExperimentInputsResult(
-            experiment_exists=False,
-            has_containerfile=False,
-            resolved_base_image="",
-            files_count=0,
-        )
-
-    set_output("experiment_exists", "true")
-    log_info(f"Experiment directory found: {experiment_name}")
-
-    has_containerfile = (experiment_dir / "Containerfile").is_file()
-    resolved_base_image = ""
-    if has_containerfile:
-        log_info("Custom Containerfile found in experiment directory")
-        set_output("has_containerfile", "true")
-        set_output("resolved_base_image", "")
-    else:
-        log_info("No custom Containerfile - using template Containerfile.experiment")
-        set_output("has_containerfile", "false")
-        resolved_base_image = orchestration_module.resolve_base_image_reference(base_image, repo_owner)
-        log_info(f"Resolved base image: {resolved_base_image}")
-        set_output("resolved_base_image", resolved_base_image)
-        if not orchestration_module.inspect_remote_manifest(container_engine, resolved_base_image):
-            raise FileNotFoundError(
-                "Base image not found or not accessible: "
-                f"{resolved_base_image}\n"
-                "For images in this repository, use format: sst-core:latest\n"
-                "For external images, use a full path: ghcr.io/username/image:tag"
-            )
-        log_success(f"Base image is accessible: {resolved_base_image}")
-
-    files_count = sum(1 for path in experiment_dir.rglob("*") if path.is_file())
-    log_info(f"Files in experiment directory: {files_count}")
-    set_output("files_count", str(files_count))
-    end_group()
-    log_success(f"Experiment validation complete: {experiment_name}")
-    return ValidateExperimentInputsResult(
-        experiment_exists=True,
-        has_containerfile=has_containerfile,
-        resolved_base_image=resolved_base_image,
-        files_count=files_count,
-    )
 
 
 def build_from_env(env: Mapping[str, str] | None = None) -> BuildResult:
