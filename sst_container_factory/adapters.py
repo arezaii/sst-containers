@@ -12,20 +12,9 @@ from . import orchestration as orchestration_module
 from .github_actions import end_group, set_output, start_group
 from .logging_utils import log_info, log_success
 from .orchestration import (
-    SourceBuildRequest,
-    SourceBuildResult,
-    source_build,
     DEFAULT_BUILD_NCPUS,
     DEFAULT_MPICH_VERSION,
-    DEFAULT_REGISTRY,
     DEFAULT_SST_CORE_REPO,
-    DEFAULT_SST_VERSION,
-    ExperimentBuildRequest,
-    ExperimentBuildResult,
-    experiment_build,
-    BuildRequest,
-    BuildResult,
-    build,
     plan_workflow_build_spec,
     ValidateContainerResult,
     WorkflowBuildRequest,
@@ -64,79 +53,6 @@ def _workflow_build_labels(env: Mapping[str, str], build_spec: orchestration_mod
         if value:
             labels[label_name] = value
     return labels
-
-
-def build_request_from_env(env: Mapping[str, str] | None = None) -> BuildRequest:
-    """Build a request object for the build entrypoint from environment variables."""
-
-    env_map = _env_map(env)
-    sst_version = env_map.get("SST_VERSION", DEFAULT_SST_VERSION)
-    return BuildRequest(
-        container_type=env_map.get("CONTAINER_TYPE", ""),
-        validate_only=_env_flag(env_map, "VALIDATE_ONLY"),
-        validation_mode=env_map.get("VALIDATION_MODE", "full"),
-        cleanup=_env_flag(env_map, "CLEANUP"),
-        registry=env_map.get("REGISTRY", DEFAULT_REGISTRY),
-        sst_version=sst_version,
-        sst_elements_version=env_map.get("SST_ELEMENTS_VERSION", sst_version),
-        mpich_version=env_map.get("MPICH_VERSION", DEFAULT_MPICH_VERSION),
-        build_ncpus=env_map.get("BUILD_NCPUS", DEFAULT_BUILD_NCPUS),
-        target_platform=env_map.get("TARGET_PLATFORM", ""),
-        enable_perf_tracking=_env_flag(env_map, "ENABLE_PERF_TRACKING"),
-        tag_suffix=env_map.get("TAG_SUFFIX", ""),
-        tag_suffix_set=_env_flag(env_map, "TAG_SUFFIX_SET"),
-        no_cache=_env_flag(env_map, "NO_CACHE"),
-        experiment_name=env_map.get("EXPERIMENT_NAME", ""),
-        base_image=env_map.get("BASE_IMAGE", ""),
-        sst_core_path=env_map.get("SST_CORE_PATH", ""),
-        sst_core_repo=env_map.get("SST_CORE_REPO", DEFAULT_SST_CORE_REPO),
-        sst_core_ref=env_map.get("SST_CORE_REF", ""),
-        sst_elements_repo=env_map.get("SST_ELEMENTS_REPO", ""),
-        sst_elements_ref=env_map.get("SST_ELEMENTS_REF", ""),
-        container_engine=env_map.get("CONTAINER_ENGINE"),
-        download_script=env_map.get("DOWNLOAD_SCRIPT", ""),
-    )
-
-
-def experiment_build_request_from_env(env: Mapping[str, str] | None = None) -> ExperimentBuildRequest:
-    """Build an experiment request object from environment variables."""
-
-    env_map = _env_map(env)
-    return ExperimentBuildRequest(
-        experiment_name=env_map.get("EXPERIMENT_NAME", ""),
-        base_image=env_map.get("BASE_IMAGE", ""),
-        build_platforms=env_map.get("BUILD_PLATFORMS", ""),
-        registry=env_map.get("REGISTRY", DEFAULT_REGISTRY),
-        tag_suffix=env_map.get("TAG_SUFFIX", "latest"),
-        validation_mode=env_map.get("VALIDATION_MODE", "full"),
-        no_cache=_env_flag(env_map, "NO_CACHE"),
-        container_engine=env_map.get("CONTAINER_ENGINE"),
-        build_args=tuple(line for line in env_map.get("BUILD_ARGS_SERIALIZED", "").splitlines() if line),
-    )
-
-
-def source_build_request_from_env(env: Mapping[str, str] | None = None) -> SourceBuildRequest:
-    """Build a source-build request object from environment variables."""
-
-    env_map = _env_map(env)
-    return SourceBuildRequest(
-        target_platform=env_map.get("TARGET_PLATFORM", ""),
-        tag_suffix=env_map.get("TAG_SUFFIX", ""),
-        sst_core_path=env_map.get("SST_CORE_PATH", ""),
-        sst_core_repo=env_map.get("SST_CORE_REPO", DEFAULT_SST_CORE_REPO),
-        sst_core_ref=env_map.get("SST_CORE_REF", ""),
-        sst_elements_repo=env_map.get("SST_ELEMENTS_REPO", ""),
-        sst_elements_ref=env_map.get("SST_ELEMENTS_REF", ""),
-        mpich_version=env_map.get("MPICH_VERSION", DEFAULT_MPICH_VERSION),
-        build_ncpus=env_map.get("BUILD_NCPUS", DEFAULT_BUILD_NCPUS),
-        registry=env_map.get("REGISTRY", DEFAULT_REGISTRY),
-        enable_perf_tracking=_env_flag(env_map, "ENABLE_PERF_TRACKING"),
-        no_cache=_env_flag(env_map, "NO_CACHE"),
-        cleanup=_env_flag(env_map, "CLEANUP"),
-        validation_mode=env_map.get("VALIDATION_MODE", "none"),
-        container_engine=env_map.get("CONTAINER_ENGINE"),
-        github_actions_mode=_env_flag(env_map, "GITHUB_ACTIONS_MODE"),
-    )
 
 
 def workflow_build_request_from_env(env: Mapping[str, str] | None = None) -> WorkflowBuildRequest:
@@ -234,24 +150,6 @@ def prepare_workflow_build_from_env(env: Mapping[str, str] | None = None) -> orc
     end_group()
     log_success("Workflow build plan ready")
     return build_spec
-
-
-def build_from_env(env: Mapping[str, str] | None = None) -> BuildResult:
-    """Execute the build entrypoint path from normalized environment variables."""
-
-    return build(build_request_from_env(env))
-
-
-def experiment_build_from_env(env: Mapping[str, str] | None = None) -> ExperimentBuildResult:
-    """Execute the experiment build path from normalized environment variables."""
-
-    return experiment_build(experiment_build_request_from_env(env))
-
-
-def source_build_from_env(env: Mapping[str, str] | None = None) -> SourceBuildResult:
-    """Execute the source build path from normalized environment variables."""
-
-    return source_build(source_build_request_from_env(env))
 
 
 def validate_container_from_env(env: Mapping[str, str] | None = None) -> ValidateContainerResult:
