@@ -96,16 +96,6 @@ class ValidateContainerResult:
 
 
 @dataclass(frozen=True)
-class ExperimentBuildResult:
-    """Resolved experiment build outputs."""
-
-    image_tag: str
-    containerfile_type: str
-    containerfile_path: str
-    docker_context: str
-
-
-@dataclass(frozen=True)
 class ExperimentBuildRequest:
     """Explicit experiment build inputs."""
 
@@ -127,15 +117,6 @@ class DownloadSourcesResult:
     requested_files: tuple[str, ...]
     total_size_mb: int
     destination_dir: str
-
-
-@dataclass(frozen=True)
-class SourceBuildResult:
-    """Resolved source build outputs."""
-
-    image_tag: str
-    build_type: str
-    image_size_mb: int
 
 
 @dataclass(frozen=True)
@@ -2281,156 +2262,6 @@ def _validate_container(
         platform=target_platform,
         image_size_mb=image_size_mb,
     )
-
-
-def experiment_build(request: ExperimentBuildRequest) -> ExperimentBuildResult:
-    """Execute the experiment build path from explicit arguments."""
-
-    normalized_request = normalize_experiment_build_request(request)
-
-    container_engine = detect_container_engine(normalized_request.container_engine)
-    build_spec = _plan_experiment_build_spec(
-        normalized_request,
-        container_engine=container_engine,
-        validate_base_image=True,
-    )
-    platform_build = build_spec.primary_platform_build
-
-    log_info("Starting experiment container build...")
-    log_info("Configuration:")
-    log_info(f"  Experiment: {normalized_request.experiment_name}")
-    log_info("  Container type: experiment")
-    log_info(
-        f"  Containerfile type: {'custom' if build_spec.source.uses_custom_containerfile else 'template'}"
-    )
-    log_info(f"  Containerfile path: {platform_build.containerfile_path}")
-    log_info(f"  Docker context: {platform_build.docker_context}")
-    log_info(f"  Tag: {platform_build.image_tag}")
-    log_info(f"  Platforms: {platform_build.platform}")
-    log_info(f"  Validation: {build_spec.verification.mode}")
-    if platform_build.build_args:
-        log_info("  Build args:")
-        for build_arg in platform_build.build_args:
-            log_info(f"    {build_arg}")
-
-    start_group("Container Build")
-    build_result = _run_command(
-        _create_container_build_command(
-            container_engine,
-            _container_plan_from_platform_build(platform_build),
-        )
-    )
-    end_group()
-    if build_result.returncode != 0:
-        raise OrchestrationError("Experiment container build failed")
-
-    log_info(f"Container built successfully: {platform_build.image_tag}")
-
-    _run_image_validation(
-        build_spec.verification.mode,
-        container_engine=container_engine,
-        image_tag=platform_build.image_tag,
-        target_platform=platform_build.platform,
-        max_size_mb=build_spec.verification.max_size_mb,
-        pre_message="Running container validation...",
-        skip_message="Skipping validation (validation mode: none)",
-        quick_success_message="Quick container validation passed",
-        metadata_success_message="Metadata-only container validation passed",
-        full_success_message="Full container validation passed",
-    )
-
-    log_info("Experiment build completed successfully!")
-    return ExperimentBuildResult(
-        image_tag=platform_build.image_tag,
-        containerfile_type="custom" if build_spec.source.uses_custom_containerfile else "template",
-        containerfile_path=platform_build.containerfile_path,
-        docker_context=platform_build.docker_context,
-    )
-
-
-def source_build(request: SourceBuildRequest) -> SourceBuildResult:
-    """Execute the source build path from explicit arguments."""
-
-    normalized_request = normalize_source_build_request(request)
-    build_spec = _plan_source_build_spec(normalized_request)
-    platform_build = build_spec.primary_platform_build
-    build_type = platform_build.build_target
-    using_local_core_checkout = build_spec.source.uses_local_core_checkout
-    container_engine = detect_container_engine(normalized_request.container_engine)
-
-    start_group("Source SST Container Build")
-    log_info("Build Configuration:")
-    if using_local_core_checkout:
-        log_info(f"  SST Core Checkout: {normalized_request.sst_core_path}")
-    else:
-        log_info(f"  SST Core Repository: {normalized_request.sst_core_repo}")
-        log_info(f"  SST Core Reference: {normalized_request.sst_core_ref}")
-    if normalized_request.sst_elements_repo:
-        log_info(f"  SST Elements Repository: {normalized_request.sst_elements_repo}")
-        log_info(f"  SST Elements Reference: {normalized_request.sst_elements_ref}")
-    log_info(f"  MPICH Version: {normalized_request.mpich_version}")
-    log_info(f"  Performance Tracking: {str(normalized_request.enable_perf_tracking).lower()}")
-    log_info(f"  Build Type: {build_type}")
-    log_info(f"  Target Platform: {normalized_request.target_platform}")
-    log_info(f"  Container Engine: {container_engine}")
-    log_info(f"  Image Tag: {platform_build.image_tag}")
-    end_group()
-
-    staged_local_source = False
-    if using_local_core_checkout:
-        stage_local_sst_core_checkout(normalized_request.sst_core_path)
-        staged_local_source = True
-
-    try:
-        build_time_seconds = _run_container_build(
-            _container_plan_from_platform_build(platform_build),
-            container_engine=container_engine,
-            failure_message="Container build failed",
-            cwd=REPO_ROOT,
-        )
-        log_success(f"Container build completed in {build_time_seconds}s")
-
-        image_size_mb = _inspect_built_image_size(container_engine, platform_build.image_tag)
-
-        _run_image_validation(
-            build_spec.verification.mode,
-            container_engine=container_engine,
-            image_tag=platform_build.image_tag,
-            target_platform=normalized_request.target_platform,
-            max_size_mb=build_spec.verification.max_size_mb,
-            group_name="Validating Container",
-            quick_success_message="Quick container validation passed",
-            metadata_success_message="Metadata-only container validation passed",
-            full_success_message="Container validation passed",
-        )
-
-        if normalized_request.cleanup:
-            log_info(f"Cleaning up image: {platform_build.image_tag}")
-            if _remove_image(
-                container_engine,
-                platform_build.image_tag,
-                warning_message="Failed to clean up image",
-            ):
-                log_success("Image cleaned up successfully")
-
-        log_success("Source build completed successfully")
-        log_info(f"Image: {platform_build.image_tag}")
-
-        if normalized_request.github_actions_mode or os.environ.get("GITHUB_ACTIONS") == "true":
-            set_output("image-tag", platform_build.image_tag)
-            set_output("build-time", str(build_time_seconds))
-            set_output("image-size-mb", str(image_size_mb))
-            set_output("platform", normalized_request.target_platform)
-            set_output("build-successful", "true")
-
-        return SourceBuildResult(
-            image_tag=platform_build.image_tag,
-            build_type=build_type,
-            image_size_mb=image_size_mb,
-        )
-    finally:
-        if staged_local_source:
-            reset_local_source_stage_dir()
 
 
 def _run_image_validation(
