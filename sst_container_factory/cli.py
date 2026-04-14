@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from typing import Any, Callable
 
@@ -63,9 +62,9 @@ def _handle_download_sources(args: argparse.Namespace) -> None:
         ]
     )
     download_sources(
-        sst_version=args.sst_version or args.sst_version_arg or DEFAULT_SST_VERSION,
+        sst_version=args.sst_version or DEFAULT_SST_VERSION,
         sst_elements_version=args.sst_elements_version,
-        mpich_version=args.mpich_version or args.mpich_version_arg or DEFAULT_MPICH_VERSION,
+        mpich_version=args.mpich_version or DEFAULT_MPICH_VERSION,
         download_mpich=(args.mpich_version is not None) if explicit_download_selection else True,
         download_sst_core=(args.sst_version is not None) if explicit_download_selection else True,
         download_sst_elements=(args.sst_elements_version is not None) if explicit_download_selection else True,
@@ -102,7 +101,6 @@ def _handle_build(args: argparse.Namespace) -> None:
             sst_core_ref=args.core_ref,
             sst_elements_repo=args.elements_repo,
             sst_elements_ref=args.elements_ref,
-            download_script=args.download_script or os.environ.get("DOWNLOAD_SCRIPT", ""),
         )
     )
 
@@ -307,8 +305,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     download_parser.add_argument("--mpich-version", metavar="VERSION", help="MPICH version to download")
     download_parser.add_argument("--force", "-f", action="store_true", help="Re-download existing files")
-    download_parser.add_argument("sst_version_arg", nargs="?")
-    download_parser.add_argument("mpich_version_arg", nargs="?")
 
     local_build_parser = _add_parser(
         subparsers,
@@ -390,8 +386,6 @@ Examples:
     )
     _add_local_common_options(local_experiment_parser)
     _add_local_experiment_options(local_experiment_parser)
-
-    local_build_parser.add_argument("--download-script", help=argparse.SUPPRESS)
 
     prepare_workflow_build_parser = _add_parser(
         subparsers,

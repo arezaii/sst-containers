@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import stat
 import subprocess
 import sys
 import tempfile
@@ -662,10 +661,6 @@ class OrchestrationTests(unittest.TestCase):
                 "FROM ubuntu:22.04\n",
                 encoding="utf-8",
             )
-            download_script = repo_root / "scripts" / "build" / "download-sources.sh"
-            download_script.parent.mkdir(parents=True)
-            download_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            download_script.chmod(download_script.stat().st_mode | stat.S_IXUSR)
 
             request = orchestration.BuildRequest(
                 container_type="dev",
@@ -679,9 +674,7 @@ class OrchestrationTests(unittest.TestCase):
                 tag_suffix="latest",
                 tag_suffix_set=False,
                 container_engine="docker",
-                download_script=str(download_script),
             )
-            download_result = subprocess.CompletedProcess(args=[str(download_script)], returncode=0)
             build_result = subprocess.CompletedProcess(args=["docker", "build"], returncode=0)
             inspect_result = subprocess.CompletedProcess(
                 args=["docker", "image", "inspect"],
@@ -699,13 +692,14 @@ class OrchestrationTests(unittest.TestCase):
             )
 
             with patch.object(orchestration, "REPO_ROOT", repo_root):
-                with patch.object(orchestration, "detect_container_engine", return_value="docker"):
-                    with patch.object(
-                        orchestration,
-                        "_run_command",
-                        side_effect=[download_result, build_result, inspect_result, inspect_result],
-                    ):
-                        result = orchestration.build(request)
+                with patch.object(orchestration, "_download_build_sources"):
+                    with patch.object(orchestration, "detect_container_engine", return_value="docker"):
+                        with patch.object(
+                            orchestration,
+                            "_run_command",
+                            side_effect=[build_result, inspect_result, inspect_result],
+                        ):
+                            result = orchestration.build(request)
 
         self.assertEqual(result.container_type, "dev")
         self.assertEqual(

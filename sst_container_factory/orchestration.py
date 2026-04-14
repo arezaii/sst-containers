@@ -195,7 +195,6 @@ class BuildRequest:
     sst_core_ref: str = ""
     sst_elements_repo: str = ""
     sst_elements_ref: str = ""
-    download_script: str = ""
 
 
 @dataclass(frozen=True)
@@ -1690,40 +1689,20 @@ def _remove_last_built_image() -> None:
 
 def _download_build_sources(
     download_spec: SourceDownloadSpec,
-    *,
-    download_script_override: str = "",
 ) -> None:
     """Download the source tarballs required for the build entrypoint."""
 
     log_info("Downloading source files...")
-    if download_script_override:
-        download_script = Path(download_script_override)
-        if not download_script.is_file():
-            raise OrchestrationError(f"Download script not found: {download_script}")
-
-        command = [str(download_script), "--force"]
-        if download_spec.download_sst_core:
-            command.extend(["--sst-version", download_spec.sst_version])
-        if download_spec.download_sst_elements:
-            command.extend(["--sst-elements-version", download_spec.sst_elements_version])
-        if download_spec.download_mpich:
-            command.extend(["--mpich-version", download_spec.mpich_version])
-
-        result = _run_command(command, cwd=Path(download_spec.destination_dir))
-        if result.returncode != 0:
-            raise OrchestrationError("Failed to download required source files")
-    else:
-        download_sources(
-            sst_version=download_spec.sst_version or DEFAULT_SST_VERSION,
-            sst_elements_version=download_spec.sst_elements_version or None,
-            mpich_version=download_spec.mpich_version or DEFAULT_MPICH_VERSION,
-            download_mpich=download_spec.download_mpich,
-            download_sst_core=download_spec.download_sst_core,
-            download_sst_elements=download_spec.download_sst_elements,
-            force_mode=download_spec.force_mode,
-            destination_dir=Path(download_spec.destination_dir),
-        )
-
+    download_sources(
+        sst_version=download_spec.sst_version or DEFAULT_SST_VERSION,
+        sst_elements_version=download_spec.sst_elements_version or None,
+        mpich_version=download_spec.mpich_version or DEFAULT_MPICH_VERSION,
+        download_mpich=download_spec.download_mpich,
+        download_sst_core=download_spec.download_sst_core,
+        download_sst_elements=download_spec.download_sst_elements,
+        force_mode=download_spec.force_mode,
+        destination_dir=Path(download_spec.destination_dir),
+    )
     log_success("Source files ready")
 
 
@@ -2173,7 +2152,6 @@ def build(request: BuildRequest) -> BuildResult:
 
             _download_build_sources(
                 build_spec.source_download,
-                download_script_override=normalized_request.download_script,
             )
 
             if normalized_request.container_type in {"core", "full", "dev"}:
