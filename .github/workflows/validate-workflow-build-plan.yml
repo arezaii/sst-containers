@@ -1,11 +1,11 @@
-name: Workflow Bake Smoke Test
+name: Validate Workflow Build Plan
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/_reusable-build-containers.yml'
-      - '.github/workflows/workflow-bake-smoke.yml'
+      - '.github/workflows/validate-workflow-build-plan.yml'
       - 'sst_container_factory/**'
       - 'Containerfiles/**'
       - 'experiments/ahp-graph/**'
