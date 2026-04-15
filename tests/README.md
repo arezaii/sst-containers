@@ -20,12 +20,14 @@ Wrapper-level smoke coverage now lives in `test_python_orchestration.py` alongsi
 Run the main commands from the repository root:
 
 ```bash
-# Run the main orchestration and wrapper-smoke suite
-.venv/bin/python -m unittest tests.test_python_orchestration
+# Run the full Python test suite through the supported helper
+./tests/run-python-tests.sh
 
-# Or run all Python tests under tests/
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+# Run the main orchestration and wrapper-smoke suite only
+./tests/run-python-tests.sh tests.test_python_orchestration
 ```
+
+The helper prefers `.venv/bin/python` when that virtual environment exists and otherwise falls back to `python3`. Set `PYTHON_BIN` if you need to force a specific interpreter.
 
 To inspect the current local CLI contract, check the wrapper help output directly:
 

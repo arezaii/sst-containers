@@ -7,11 +7,24 @@ on:
       - '.github/workflows/_reusable-build-containers.yml'
       - '.github/workflows/validate-workflow-build-plan.yml'
       - 'sst_container_factory/**'
+      - 'tests/**'
       - 'Containerfiles/**'
       - 'experiments/ahp-graph/**'
       - 'experiments/phold-example/**'
 
 jobs:
+  python-tests:
+    name: Python Test Suite
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Run Python unit test suite
+        run: ./tests/run-python-tests.sh
+
   validate-build-plan:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
