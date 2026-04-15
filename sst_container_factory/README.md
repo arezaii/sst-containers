@@ -124,4 +124,4 @@ The remaining support surface is intentionally small:
 - `sst_container_factory/bin/` contains thin local entry-point wrappers that export `PYTHONPATH` and exec the Python CLI
 - `sst_container_factory/` contains the stdlib-only Python transition layer for workflow orchestration, migrated build execution paths, and local wrapper entrypoints
 - The Python transition layer uses only the standard library so the repo does not pick up extra runtime package prerequisites
-- The Python interface for github workflows is handled through environment variable setting/parsing and is not user-facing. Using ENV vars this way is better for layering actions as it allows collecting args at parent workflow and passing them into the reusable portions
+- The Python interface for GitHub workflows is handled through environment variable setting/parsing and is not user-facing. Using ENV vars this way is better for layering actions as it allows collecting args at parent workflow and passing them into the reusable portions
