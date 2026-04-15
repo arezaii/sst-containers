@@ -27,18 +27,11 @@ Run the main commands from the repository root:
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-You can also run the module from the `tests/` directory:
-
-```bash
-cd tests
-../.venv/bin/python -m unittest test_python_orchestration
-```
-
 To inspect the current local CLI contract, check the wrapper help output directly:
 
 ```bash
-../sst_container_factory/bin/build.sh --help
-../sst_container_factory/bin/build.sh source --help
-../sst_container_factory/bin/build.sh experiment --help
-../sst_container_factory/bin/download-sources.sh --help
+./sst_container_factory/bin/build.sh --help
+./sst_container_factory/bin/build.sh source --help
+./sst_container_factory/bin/build.sh experiment --help
+./sst_container_factory/bin/download-sources.sh --help
 ```
