@@ -19,7 +19,7 @@ Supported build targets:
 
 Local builds are host-platform only. The shared `--platform` option rejects anything other than the detected host platform.
 
-Inspect the current contract with:
+Inspect the current interface with:
 
 ```bash
 ./sst_container_factory/bin/build.sh --help
@@ -124,3 +124,4 @@ The remaining support surface is intentionally small:
 - `sst_container_factory/bin/` contains thin local entry-point wrappers that export `PYTHONPATH` and exec the Python CLI
 - `sst_container_factory/` contains the stdlib-only Python transition layer for workflow orchestration, migrated build execution paths, and local wrapper entrypoints
 - The Python transition layer uses only the standard library so the repo does not pick up extra runtime package prerequisites
+- The Python interface for github workflows is handled through environment variable setting/parsing and is not user-facing. Using ENV vars this way is better for layering actions as it allows collecting args at parent workflow and passing them into the reusable portions

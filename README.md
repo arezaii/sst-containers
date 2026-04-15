@@ -101,7 +101,6 @@ Current examples:
 - [sst_container_factory/README.md](sst_container_factory/README.md): local wrapper and downloader usage
 - [DEVCONTAINER_SETUP.md](DEVCONTAINER_SETUP.md): VS Code Dev Container setup
 - [tests/README.md](tests/README.md): test inventory and usage
-- [CLI_NORMALIZATION.md](CLI_NORMALIZATION.md): maintainer notes for the public local CLI
 
 ## Internal Workflow Pieces
 
