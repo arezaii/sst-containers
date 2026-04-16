@@ -14,7 +14,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from sst_container_factory import adapters, build_spec, cli, orchestration
+from sst_container_factory import adapters, build_spec, cli, github_actions, logging_utils, orchestration
 
 
 class OrchestrationTests(unittest.TestCase):
@@ -444,6 +444,83 @@ class OrchestrationTests(unittest.TestCase):
                 self.assertEqual(status, 1)
                 self.assertIn(f"invalid choice: '{command}'", stderr)
 
+    def test_github_actions_helpers_emit_plain_text_outside_actions(self) -> None:
+        """GitHub Actions helpers should fall back to plain-text local output outside Actions."""
+
+        stdout = io.StringIO()
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(stdout):
+                github_actions.set_output("answer", "42")
+                github_actions.emit_annotation("notice", "hello")
+                github_actions.start_group("Local Group")
+                github_actions.end_group()
+
+        self.assertEqual(stdout.getvalue(), "hello\n=== Local Group ===\n\n")
+
+    def test_github_actions_helpers_emit_annotations_and_outputs_in_actions(self) -> None:
+        """GitHub Actions helpers should emit annotations and step outputs inside Actions."""
+
+        stdout = io.StringIO()
+        with tempfile.NamedTemporaryFile() as output_file:
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_ACTIONS": "true",
+                    "GITHUB_OUTPUT": output_file.name,
+                },
+                clear=False,
+            ):
+                with redirect_stdout(stdout):
+                    github_actions.set_output("answer", "42")
+                    github_actions.emit_annotation("notice", "hello")
+                    github_actions.start_group("Workflow Group")
+                    github_actions.end_group()
+
+            written = Path(output_file.name).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            stdout.getvalue(),
+            "::notice::hello\n::group::Workflow Group\n::endgroup::\n",
+        )
+        self.assertIn("answer=42\n", written)
+
+    def test_logging_utils_use_standard_logger_outside_github_actions(self) -> None:
+        """Logging helpers should route through the standard logger outside Actions."""
+
+        with patch.object(logging_utils.github_actions, "is_github_actions", return_value=False):
+            with patch.object(logging_utils.LOGGER, "info") as info_log:
+                with patch.object(logging_utils.LOGGER, "warning") as warning_log:
+                    with patch.object(logging_utils.LOGGER, "error") as error_log:
+                        logging_utils.log_info("plain info")
+                        logging_utils.log_warning("plain warning")
+                        logging_utils.log_error("plain error")
+                        logging_utils.log_success("plain success")
+
+        info_log.assert_any_call("plain info")
+        info_log.assert_any_call("[SUCCESS] plain success")
+        warning_log.assert_called_once_with("plain warning")
+        error_log.assert_called_once_with("plain error")
+
+    def test_logging_utils_emit_annotations_in_github_actions(self) -> None:
+        """Logging helpers should emit GitHub annotations inside Actions."""
+
+        with patch.object(logging_utils.github_actions, "is_github_actions", return_value=True):
+            with patch.object(logging_utils.github_actions, "emit_annotation") as emit_annotation:
+                logging_utils.log_info("workflow info")
+                logging_utils.log_warning("workflow warning")
+                logging_utils.log_error("workflow error")
+                logging_utils.log_success("workflow success")
+
+        self.assertEqual(
+            [call.args for call in emit_annotation.call_args_list],
+            [
+                ("notice", "workflow info"),
+                ("warning", "workflow warning"),
+                ("error", "workflow error"),
+                ("notice", "[SUCCESS] workflow success"),
+            ],
+        )
+
     def test_validate_container_reports_size_and_platform(self) -> None:
         """Container validation should return the computed image size."""
 
@@ -478,6 +555,35 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(result.image_tag, env["IMAGE_TAG"])
         self.assertEqual(result.platform, env["PLATFORM"])
         self.assertEqual(result.image_size_mb, 512)
+
+    def test_validate_container_from_env_uses_metadata_mode_without_pull(self) -> None:
+        """Workflow validation adapter should support metadata-mode validation paths."""
+
+        with patch.object(orchestration, "detect_container_engine", return_value="docker"):
+            with patch.object(orchestration, "_run_image_validation", return_value=256) as run_validation:
+                result = adapters.validate_container_from_env(
+                    {
+                        "IMAGE_TAG": "ghcr.io/hpc-ai-adv-dev/sst-core:15.1.2-amd64",
+                        "PLATFORM": "linux/amd64",
+                        "MAX_SIZE_MB": "2048",
+                        "VALIDATION_MODE": "metadata",
+                    }
+                )
+
+        self.assertEqual(result.image_size_mb, 256)
+        run_validation.assert_called_once_with(
+            "metadata",
+            container_engine="docker",
+            image_tag="ghcr.io/hpc-ai-adv-dev/sst-core:15.1.2-amd64",
+            target_platform="linux/amd64",
+            max_size_mb=2048,
+            pre_message="Running container validation...",
+            skip_message="Skipping validation (validation mode: none)",
+            quick_success_message="Quick container validation passed",
+            metadata_success_message="Metadata-only container validation passed",
+            full_success_message="Container validation passed",
+            return_image_size=True,
+        )
 
     def test_full_build_validation_uses_local_image_without_pull(self) -> None:
         """Build-path full validation should validate the local image without re-pulling it."""
@@ -689,6 +795,39 @@ class OrchestrationTests(unittest.TestCase):
             f"ghcr.io/hpc-ai-adv-dev/sst-perf-track-full:15.1.2-{self.host_arch}",
         )
 
+    def test_plan_build_spec_captures_core_release_inputs(self) -> None:
+        """Core local builds should plan the standard release image path."""
+
+        request = orchestration.BuildRequest(
+            container_type="core",
+            target_platform=self.host_platform,
+            registry="ghcr.io/hpc-ai-adv-dev",
+            sst_version="15.1.2",
+            mpich_version="4.0.2",
+            build_ncpus="4",
+            tag_suffix="latest",
+            tag_suffix_set=False,
+            validation_mode="metadata",
+        )
+
+        spec = orchestration.plan_build_spec(request)
+
+        self.assertEqual(spec.build_kind, "local")
+        self.assertEqual(spec.container_type, "core")
+        self.assertEqual(spec.tag_suffix, "15.1.2")
+        self.assertEqual(spec.source.source_kind, "release-tarballs")
+        self.assertEqual(spec.primary_platform_build.build_target, "sst-core")
+        self.assertIn("SSTver=15.1.2", spec.primary_platform_build.build_args)
+        self.assertEqual(
+            spec.primary_platform_build.image_tag,
+            f"ghcr.io/hpc-ai-adv-dev/sst-core:15.1.2-{self.host_arch}",
+        )
+        self.assertIsNotNone(spec.source_download)
+        source_download = spec.source_download
+        assert source_download is not None
+        self.assertTrue(source_download.download_sst_core)
+        self.assertFalse(source_download.download_sst_elements)
+
     def test_plan_build_spec_captures_full_source_build_from_local_checkout(self) -> None:
         """Build spec planning should encode local-checkout source inputs and build arguments."""
 
@@ -738,6 +877,47 @@ class OrchestrationTests(unittest.TestCase):
             f"ghcr.io/hpc-ai-adv-dev/sst-perf-track-custom:local-main-full-{self.host_arch}",
         )
 
+    def test_plan_build_spec_captures_full_source_build_from_git_ref(self) -> None:
+        """Source build planning should cover the normal git-ref full-build path."""
+
+        request = orchestration.BuildRequest(
+            container_type="custom",
+            target_platform=self.host_platform,
+            registry="ghcr.io/hpc-ai-adv-dev",
+            sst_core_ref="main",
+            sst_elements_ref="main",
+            tag_suffix="latest",
+            tag_suffix_set=False,
+            validation_mode="metadata",
+        )
+
+        spec = orchestration.plan_build_spec(request)
+
+        self.assertEqual(spec.build_kind, "local")
+        self.assertEqual(spec.source.source_kind, "git-ref")
+        self.assertFalse(spec.source.uses_local_core_checkout)
+        self.assertEqual(
+            spec.source.sst_elements_repo,
+            orchestration.DEFAULT_SST_ELEMENTS_REPO,
+        )
+        self.assertEqual(spec.primary_platform_build.build_target, "full-build")
+        self.assertIn(
+            f"SSTrepo={orchestration.DEFAULT_SST_CORE_REPO}",
+            spec.primary_platform_build.build_args,
+        )
+        self.assertIn("tag=main", spec.primary_platform_build.build_args)
+        self.assertIn(
+            f"SSTElementsRepo={orchestration.DEFAULT_SST_ELEMENTS_REPO}",
+            spec.primary_platform_build.build_args,
+        )
+        self.assertIn("elementsTag=main", spec.primary_platform_build.build_args)
+        self.assertEqual(spec.primary_platform_build.additional_contexts, ())
+        self.assertEqual(spec.tag_suffix, "main-full")
+        self.assertEqual(
+            spec.primary_platform_build.image_tag,
+            f"ghcr.io/hpc-ai-adv-dev/sst-custom:main-full-{self.host_arch}",
+        )
+
     def test_plan_build_spec_resolves_experiment_template_build(self) -> None:
         """Build spec planning should capture template experiment builds and base images."""
 
@@ -772,6 +952,114 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(
             spec.primary_platform_build.image_tag,
             f"ghcr.io/hpc-ai-adv-dev/phold-example:latest-{self.host_arch}",
+        )
+
+    def test_plan_build_spec_resolves_experiment_custom_containerfile_build(self) -> None:
+        """Build spec planning should cover experiments with their own Containerfile."""
+
+        request = orchestration.BuildRequest(
+            container_type="experiment",
+            target_platform=self.host_platform,
+            experiment_name="ahp-graph",
+            registry="ghcr.io/hpc-ai-adv-dev",
+            tag_suffix="latest",
+            tag_suffix_set=True,
+            validation_mode="metadata",
+        )
+
+        spec = orchestration.plan_build_spec(request)
+
+        self.assertEqual(spec.build_kind, "local")
+        self.assertEqual(spec.container_type, "experiment")
+        self.assertEqual(spec.source.source_kind, "experiment-custom-containerfile")
+        self.assertTrue(spec.source.uses_custom_containerfile)
+        self.assertEqual(spec.source.base_image, "sst-core:latest")
+        self.assertEqual(
+            spec.primary_platform_build.containerfile_path,
+            str(self.repo_root / "experiments" / "ahp-graph" / "Containerfile"),
+        )
+        self.assertEqual(
+            spec.primary_platform_build.docker_context,
+            str(self.repo_root / "experiments" / "ahp-graph"),
+        )
+        self.assertEqual(spec.primary_platform_build.build_args, ())
+        self.assertEqual(
+            spec.primary_platform_build.image_tag,
+            f"ghcr.io/hpc-ai-adv-dev/ahp-graph:latest-{self.host_arch}",
+        )
+
+    def test_plan_build_spec_for_dev_uses_dev_containerfile_and_latest_tag(self) -> None:
+        """Development build planning should use the dev containerfile and default latest tag."""
+
+        request = orchestration.BuildRequest(
+            container_type="dev",
+            target_platform=self.host_platform,
+            registry="ghcr.io/hpc-ai-adv-dev",
+            mpich_version="4.0.2",
+            build_ncpus="4",
+            tag_suffix="latest",
+            tag_suffix_set=False,
+            validation_mode="metadata",
+        )
+
+        spec = orchestration.plan_build_spec(request)
+
+        self.assertEqual(spec.build_kind, "local")
+        self.assertEqual(spec.container_type, "dev")
+        self.assertEqual(spec.tag_suffix, "latest")
+        self.assertEqual(spec.source.source_kind, "development-dependencies")
+        self.assertEqual(
+            spec.primary_platform_build.containerfile_path,
+            str(self.repo_root / "Containerfiles" / "Containerfile.dev"),
+        )
+        self.assertEqual(spec.primary_platform_build.build_target, "")
+        self.assertEqual(
+            spec.primary_platform_build.image_tag,
+            f"ghcr.io/hpc-ai-adv-dev/sst-dev:latest-{self.host_arch}",
+        )
+        self.assertIsNotNone(spec.source_download)
+        source_download = spec.source_download
+        assert source_download is not None
+        self.assertTrue(source_download.download_mpich)
+        self.assertFalse(source_download.download_sst_core)
+
+    def test_validate_build_image_uses_development_profile_for_dev_builds(self) -> None:
+        """Development build validation should use the development metadata profile."""
+
+        build_spec_value = orchestration.plan_build_spec(
+            orchestration.BuildRequest(
+                container_type="dev",
+                target_platform=self.host_platform,
+                registry="ghcr.io/hpc-ai-adv-dev",
+                mpich_version="4.0.2",
+                build_ncpus="4",
+                tag_suffix="latest",
+                tag_suffix_set=False,
+                validation_mode="none",
+            )
+        )
+
+        with patch.object(orchestration, "_run_image_validation", return_value=None) as run_validation:
+            result = orchestration._validate_build_image(
+                build_spec=build_spec_value,
+                container_engine="docker",
+                image_tag=f"ghcr.io/hpc-ai-adv-dev/sst-dev:latest-{self.host_arch}",
+                target_platform=self.host_platform,
+            )
+
+        self.assertIsNone(result)
+        run_validation.assert_called_once_with(
+            "none",
+            container_engine="docker",
+            image_tag=f"ghcr.io/hpc-ai-adv-dev/sst-dev:latest-{self.host_arch}",
+            target_platform=self.host_platform,
+            max_size_mb=build_spec_value.verification.max_size_mb,
+            validation_profile="development",
+            skip_message="Skipping validation (validation mode: none)",
+            quick_success_message="Quick container validation passed",
+            metadata_success_message="Metadata-only container validation passed",
+            full_success_message="Container validation passed",
+            return_image_size=True,
         )
 
     def test_plan_workflow_build_spec_for_release_full(self) -> None:
@@ -871,6 +1159,78 @@ class OrchestrationTests(unittest.TestCase):
         )
         self.assertIn("tag=abc1234", spec.primary_platform_build.build_args)
         self.assertEqual(spec.primary_platform_build.additional_contexts, ())
+        self.assertIsNotNone(spec.source_download)
+        source_download = spec.source_download
+        assert source_download is not None
+        self.assertTrue(source_download.download_mpich)
+        self.assertFalse(source_download.download_sst_core)
+
+    def test_plan_workflow_build_spec_for_dev_defaults_latest_tag(self) -> None:
+        """Workflow planning should cover the standard development image path."""
+
+        spec = orchestration.plan_workflow_build_spec(
+            orchestration.WorkflowBuildRequest(
+                container_type="dev",
+                image_prefix="hpc-ai-adv-dev/sst-dev",
+                build_platforms="linux/amd64,linux/arm64",
+                registry="ghcr.io",
+                mpich_version="4.0.2",
+                build_ncpus="2",
+            )
+        )
+
+        self.assertEqual(spec.build_kind, "workflow")
+        self.assertEqual(spec.container_type, "dev")
+        self.assertEqual(spec.tag_suffix, "latest")
+        self.assertEqual(
+            spec.publication.manifest_tag,
+            "ghcr.io/hpc-ai-adv-dev/sst-dev:latest",
+        )
+        self.assertEqual(len(spec.platform_builds), 2)
+        self.assertEqual(
+            spec.primary_platform_build.containerfile_path,
+            "Containerfiles/Containerfile.dev",
+        )
+        self.assertEqual(spec.primary_platform_build.build_target, "")
+        self.assertEqual(spec.source.source_kind, "development-dependencies")
+        self.assertIsNotNone(spec.source_download)
+        source_download = spec.source_download
+        assert source_download is not None
+        self.assertTrue(source_download.download_mpich)
+        self.assertFalse(source_download.download_sst_core)
+
+    def test_plan_workflow_build_spec_for_custom_experiment_containerfile(self) -> None:
+        """Workflow planning should support experiment directories with custom Containerfiles."""
+
+        spec = orchestration.plan_workflow_build_spec(
+            orchestration.WorkflowBuildRequest(
+                container_type="experiment",
+                image_prefix="hpc-ai-adv-dev",
+                build_platforms="linux/amd64",
+                tag_suffix="latest",
+                registry="ghcr.io",
+                experiment_name="ahp-graph",
+            ),
+            validate_base_image=False,
+        )
+
+        self.assertEqual(spec.build_kind, "workflow")
+        self.assertEqual(spec.container_type, "experiment")
+        self.assertEqual(
+            spec.publication.manifest_tag,
+            "ghcr.io/hpc-ai-adv-dev/ahp-graph:latest",
+        )
+        self.assertEqual(spec.source.source_kind, "experiment-custom-containerfile")
+        self.assertTrue(spec.source.uses_custom_containerfile)
+        self.assertEqual(
+            spec.primary_platform_build.containerfile_path,
+            "experiments/ahp-graph/Containerfile",
+        )
+        self.assertEqual(
+            spec.primary_platform_build.docker_context,
+            "experiments/ahp-graph",
+        )
+        self.assertEqual(spec.primary_platform_build.build_args, ())
         self.assertIsNotNone(spec.source_download)
         source_download = spec.source_download
         assert source_download is not None
